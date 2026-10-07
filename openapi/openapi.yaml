@@ -1,0 +1,53 @@
+openapi: 3.0.3
+info:
+  title: Exam Platform API
+  version: 0.1.0
+  description: Multi-tenant online examination and assessment platform API.
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      summary: API, database and Redis connectivity
+      operationId: getHealth
+      responses:
+        '200':
+          description: All dependencies are up
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: At least one dependency is down
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+components:
+  schemas:
+    HealthReport:
+      type: object
+      required: [status, api, database, redis, version, environment]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        api: { type: string, enum: [up] }
+        database: { type: string, enum: [up, down] }
+        redis: { type: string, enum: [up, down] }
+        version: { type: string }
+        environment: { type: string }
+    HealthResponse:
+      type: object
+      required: [success, data, error, requestId]
+      properties:
+        success: { type: boolean }
+        data:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/HealthReport'
+        error:
+          nullable: true
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+        requestId: { type: string }

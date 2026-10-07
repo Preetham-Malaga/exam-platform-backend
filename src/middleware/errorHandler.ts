@@ -1,0 +1,39 @@
+// PURPOSE: Converts every error and unknown route into the standard failure envelope.
+// WHY: Users must never see stack traces, SQL or secrets; details are logged server-side only.
+// DEPENDS ON: utils/response.ts.
+
+import type { FastifyError, FastifyInstance } from 'fastify';
+import { fail } from '../utils/response.js';
+
+const FRIENDLY: Record<number, { code: string; message: string }> = {
+  400: { code: 'BAD_REQUEST', message: 'The request is invalid.' },
+  401: { code: 'UNAUTHENTICATED', message: 'Please sign in to continue.' },
+  403: { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' },
+  404: { code: 'NOT_FOUND', message: 'The requested resource was not found.' },
+  429: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again shortly.' },
+};
+
+export function registerErrorHandling(app: FastifyInstance): void {
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    const status =
+      typeof error.statusCode === 'number' && error.statusCode >= 400 ? error.statusCode : 500;
+
+    if (status >= 500) {
+      request.log.error({ err: error }, 'unhandled error');
+    } else {
+      request.log.warn({ code: error.code, status }, 'request rejected');
+    }
+
+    const friendly = FRIENDLY[status] ?? {
+      code: status >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_FAILED',
+      message:
+        status >= 500 ? 'Something went wrong on our side. Please try again.' : 'Request failed.',
+    };
+    return reply.code(status).send(fail(friendly.code, friendly.message, request.id));
+  });
+
+  app.setNotFoundHandler((request, reply) => {
+    const { code, message } = FRIENDLY[404]!;
+    return reply.code(404).send(fail(code, message, request.id));
+  });
+}
