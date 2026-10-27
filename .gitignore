@@ -6,3 +6,8 @@ coverage
 !.env.example
 *.log
 .DS_Store
+
+# The frontend has its own repository (exam-platform-frontend)
+tests/frontend/
+# Local copies of the project, not source
+Backend Read/

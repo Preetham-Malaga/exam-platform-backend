@@ -9,6 +9,9 @@ export function createRedis(url: string, onError?: (err: Error) => void): Redis 
     maxRetriesPerRequest: 2,
     connectTimeout: 5_000,
     lazyConnect: true,
+    // While Redis is down, commands fail at once instead of waiting in a queue for a reconnect:
+    // otherwise every request that touches Redis (rate limiting, /health) hangs for seconds.
+    enableOfflineQueue: false,
   });
   // Without a listener ioredis prints every connection error; /health reports the outage instead.
   client.on('error', (err) => onError?.(err));

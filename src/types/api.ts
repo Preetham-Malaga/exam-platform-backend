@@ -1,10 +1,11 @@
 // PURPOSE: Shared TypeScript shapes for the API response envelope.
 // WHY: Every endpoint must answer with the same { success, data, error, requestId } format.
-// DEPENDS ON: Nothing. Used by utils/response.ts, middleware/errorHandler.ts and every controller.
+// DEPENDS ON: Nothing.
 
 export interface ApiError {
   code: string;
   message: string;
+  details?: unknown;
 }
 
 export interface ApiSuccess<T> {
@@ -22,3 +23,8 @@ export interface ApiFailure {
 }
 
 export type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
+
+export interface Paginated<T> {
+  items: T[];
+  pagination: { page: number; pageSize: number; total: number; totalPages: number };
+}

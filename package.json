@@ -14,11 +14,18 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "migrate": "node scripts/migrate.mjs",
+    "migrate:local": "node scripts/migrate.mjs --shim",
+    "openapi:generate": "tsx scripts/gen-openapi.ts",
+    "test:db": "vitest run tests/db tests/api",
+    "dev:create-org": "node scripts/dev-create-org.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
     "@fastify/helmet": "^13.1.1",
+    "@fastify/rate-limit": "^11.2.0",
+    "@supabase/supabase-js": "^2.117.2",
     "dotenv": "^18.0.5",
     "fastify": "^5.12.5",
     "ioredis": "^6.0.0",
@@ -35,6 +42,7 @@
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.71.0",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "yaml": "^2.9.1"
   }
 }

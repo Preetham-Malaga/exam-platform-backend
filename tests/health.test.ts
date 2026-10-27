@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import type { Pool } from 'pg';
 import { buildApp } from '../src/app.js';
+import type { AuthGateway } from '../src/auth/gateway.js';
 
 const base = {
   environment: 'test',
   version: '0.1.0',
   corsOrigins: ['http://localhost:5173'],
   logLevel: 'silent',
+  frontendUrl: 'http://localhost:5173',
+  pool: {} as unknown as Pool,
+  gateway: {} as unknown as AuthGateway,
 };
 const up = async () => undefined;
 const down = async () => {

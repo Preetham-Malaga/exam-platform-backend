@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs';
 import 'dotenv/config';
 import { buildApp } from './app.js';
+import { createSupabaseGateway } from './auth/gateway.js';
 import { createRedis } from './cache/redis.js';
 import { parseEnv } from './config/env.js';
 import { createPool } from './db/pool.js';
@@ -25,6 +26,15 @@ async function main(): Promise<void> {
     version: readVersion(),
     corsOrigins: env.CORS_ORIGINS,
     logLevel: env.LOG_LEVEL,
+    pool,
+    // Rate limits are shared through Redis when it is up at start; otherwise each server counts in memory.
+    ...(redis.status === 'ready' ? { redis } : {}),
+    frontendUrl: env.FRONTEND_URL,
+    gateway: createSupabaseGateway({
+      url: env.SUPABASE_URL,
+      anonKey: env.SUPABASE_ANON_KEY,
+      serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
+    }),
     checks: {
       database: async () => {
         await pool.query('select 1');
