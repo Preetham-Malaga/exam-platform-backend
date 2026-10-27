@@ -7,7 +7,7 @@ const app = (environment: string) =>
   buildApp({
     environment,
     version: 'x',
-    corsOrigins: ['https://app.example.com'],
+    corsOrigins: ['https://app.example.com', 'https://exam-fe-*-team.vercel.app'],
     logLevel: 'silent',
     frontendUrl: 'https://app.example.com',
     pool: {} as unknown as Pool,
@@ -52,6 +52,21 @@ describe('CORS (browser access to the API)', () => {
     for (const env of ['production', 'staging', 'test'])
       for (const o of ['https://evil.example', 'http://localhost:5174'])
         expect((await preflight(env, o, 'GET')).allowOrigin, `${env} ${o}`).toBeUndefined();
+  });
+
+  it('a "*" entry covers every preview deploy of that project, and nothing else', async () => {
+    for (const o of [
+      'https://exam-fe-dodagtuoz-team.vercel.app',
+      'https://exam-fe-qphc5p0q5-team.vercel.app',
+    ])
+      expect((await preflight('production', o, 'PATCH')).allowOrigin, o).toBe(o);
+    for (const o of [
+      'https://exam-fe-x.evil.example-team.vercel.app', // "*" never spans a dot
+      'https://exam-fe-abc-team.vercel.app.evil.example',
+      'http://exam-fe-abc-team.vercel.app',
+      'https://other-abc-team.vercel.app',
+    ])
+      expect((await preflight('production', o, 'GET')).allowOrigin, o).toBeUndefined();
   });
 
   it('in development the frontend may run on any local port (5173 busy -> 5174)', async () => {
