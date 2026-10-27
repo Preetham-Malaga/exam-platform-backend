@@ -43,15 +43,26 @@ export interface AppOptions {
 const LOCAL_DEV_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
 /**
- * Browser origins that may call the API: exactly CORS_ORIGINS, plus (development only) the frontend on any local port,
- * so a dev server that moved from 5173 to 5174 does not silently break sign-in.
+ * A CORS_ORIGINS entry with "*" matches one run of letters, digits and dashes (never a dot), e.g.
+ * https://exam-platform-frontend-*-preetham-team.vercel.app covers every Vercel deploy of that project.
+ */
+function originPattern(entry: string): RegExp {
+  const escaped = entry.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[a-z0-9-]+');
+  return new RegExp(`^${escaped}$`, 'i');
+}
+
+/**
+ * Browser origins that may call the API: CORS_ORIGINS (exact, or "*" patterns), plus (development only) the frontend
+ * on any local port, so a dev server that moved from 5173 to 5174 does not silently break sign-in.
  */
 export function allowedOrigin(list: string[], environment: string) {
+  const patterns = list.filter((o) => o.includes('*')).map(originPattern);
   return (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) =>
     cb(
       null,
       origin === undefined ||
         list.includes(origin) ||
+        patterns.some((p) => p.test(origin)) ||
         (environment === 'development' && LOCAL_DEV_ORIGIN.test(origin)),
     );
 }
