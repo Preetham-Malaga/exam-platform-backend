@@ -49,6 +49,10 @@ const EXPECTED_FILES = [
   '036_rls_policies',
   '037_functions',
   '038_triggers',
+  '039_roles_readonly',
+  '040_leaderboard_privacy',
+  '041_app_functions_lockdown',
+  '042_academic_structure',
 ].map((n) => `${n}.sql`);
 
 // Tables that carry organization_id but intentionally do not follow every rule (documented in docs/database.md).
@@ -66,7 +70,7 @@ const NO_UPDATED_AT = new Set([
 const SINGLE_COLUMN_FK_PARENTS = new Set(['roles']);
 
 describe('migration files', () => {
-  it('exist in the exact order required by the architecture guide', () => {
+  it('exist in order: 001-038 as in the architecture guide, then later additions', () => {
     const files = readdirSync(migrationsDir)
       .filter((f) => f.endsWith('.sql'))
       .sort();
@@ -520,7 +524,7 @@ describe.skipIf(!url)('applying the migrations to an EMPTY database', () => {
     await admin.end();
   });
 
-  it('applies all 38 migrations from scratch, is idempotent, and refuses edited migrations', async (ctx) => {
+  it('applies every migration from scratch, is idempotent, and refuses edited migrations', async (ctx) => {
     const u = new URL(url!);
     dbName = `exam_phase3_${Date.now().toString(36)}`;
     adminUrl = (() => {
@@ -541,7 +545,9 @@ describe.skipIf(!url)('applying the migrations to an EMPTY database', () => {
       await admin.end().catch(() => undefined);
     }
 
-    expect(run(['--shim'], tmpUrl)).toContain('Done. 38 migration(s) applied.');
+    expect(run(['--shim'], tmpUrl)).toContain(
+      `Done. ${EXPECTED_FILES.length} migration(s) applied.`,
+    );
     expect(run([], tmpUrl)).toContain('Database is up to date.');
 
     const c = new pg.Client({ connectionString: tmpUrl });

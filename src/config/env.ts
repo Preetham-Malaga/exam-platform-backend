@@ -15,6 +15,7 @@ export const envSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: nonEmpty,
   DATABASE_URL: nonEmpty,
   REDIS_URL: nonEmpty,
+  FRONTEND_URL: z.url().default('http://localhost:5173'),
   CORS_ORIGINS: nonEmpty.transform((value) =>
     value
       .split(',')
