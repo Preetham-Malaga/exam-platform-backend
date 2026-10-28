@@ -24,6 +24,46 @@ export interface AuthGateway {
   deleteUser(id: string): Promise<void>;
 }
 
+/** The JWT's own expiry (seconds since epoch), read without verifying; only used to shorten the cache below. */
+function tokenExpiry(token: string): number | null {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString());
+    return typeof payload.exp === 'number' ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remembers a successfully verified token for a short time (default 30 s, never past the token's expiry), so a page
+ * that makes several API calls asks Supabase Auth once instead of once per call. Failed checks are never cached.
+ * Trade-off: a session revoked elsewhere keeps working for at most `ttlMs` on this server.
+ */
+export function withTokenCache(
+  gateway: AuthGateway,
+  ttlMs = 30_000,
+  maxEntries = 5_000,
+): AuthGateway {
+  const cache = new Map<string, { user: AuthUser; until: number }>();
+  return {
+    ...gateway,
+    async verifyToken(token) {
+      const now = Date.now();
+      const hit = cache.get(token);
+      if (hit && hit.until > now) return hit.user;
+      cache.delete(token);
+      const user = await gateway.verifyToken(token);
+      if (user) {
+        const exp = tokenExpiry(token);
+        const until = Math.min(now + ttlMs, exp ? exp * 1000 : now + ttlMs);
+        if (cache.size >= maxEntries) cache.delete(cache.keys().next().value!);
+        if (until > now) cache.set(token, { user, until });
+      }
+      return user;
+    },
+  };
+}
+
 export function createSupabaseGateway(opts: {
   url: string;
   anonKey: string;
