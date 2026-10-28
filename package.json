@@ -19,6 +19,7 @@
     "migrate:local": "node scripts/migrate.mjs --shim",
     "openapi:generate": "tsx scripts/gen-openapi.ts",
     "test:db": "vitest run tests/db tests/api",
+    "seed:e2e": "node scripts/seed-e2e.mjs --accounts-file tests/frontend/.env.e2e",
     "dev:create-org": "node scripts/dev-create-org.mjs"
   },
   "dependencies": {
