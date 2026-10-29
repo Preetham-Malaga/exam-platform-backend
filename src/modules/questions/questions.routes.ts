@@ -191,6 +191,7 @@ export function registerQuestionRoutes(app: FastifyInstance, d: Deps): void {
       const q = listQuerySchema.parse(req.query);
       const f = z
         .object({
+          courseId: z.uuid().optional(),
           subjectId: z.uuid().optional(),
           topicId: z.uuid().optional(),
           status: z.enum(STATUS).optional(),
@@ -201,6 +202,7 @@ export function registerQuestionRoutes(app: FastifyInstance, d: Deps): void {
         .parse(req.query);
       const params: unknown[] = [org(req)];
       const where = ['q.organization_id = $1', 'q.deleted_at is null'];
+      if (f.courseId) where.push(`s.course_id = $${params.push(f.courseId)}`);
       if (f.subjectId) where.push(`q.subject_id = $${params.push(f.subjectId)}`);
       if (f.topicId) where.push(`q.topic_id = $${params.push(f.topicId)}`);
       if (f.status) where.push(`q.status = $${params.push(f.status)}`);
@@ -292,6 +294,98 @@ export function registerQuestionRoutes(app: FastifyInstance, d: Deps): void {
       });
       reply.code(201);
       return ok(question, req.id);
+    },
+  );
+
+  // Bulk import (CSV parsed in the browser). One transaction per call; each row is checked like a single create, and a
+  // row that fails is reported by its row number while the valid rows are saved.
+  app.post(
+    `${API}/questions/import`,
+    { preHandler: [d.authenticate, requirePermission('question.create')] },
+    async (req) => {
+      const body = z
+        .object({
+          publish: z.boolean().default(false),
+          rows: z.array(z.object({ row: z.number().int().min(1) }).passthrough()).min(1).max(500),
+        })
+        .strict()
+        .parse(req.body);
+      if (body.publish && !req.ctx.permissions.includes('question.publish'))
+        throw new AppError(403, 'FORBIDDEN', 'You may import questions as drafts only.');
+      const isAdmin =
+        req.ctx.roles.includes('ORGANIZATION_OWNER') ||
+        req.ctx.roles.includes('ORGANIZATION_ADMIN');
+      const rowSchema = contentFields.strict().superRefine(checkContent);
+      const errors: Array<{ row: number; message: string }> = [];
+      let created = 0;
+      await withUser(d.pool, req.ctx.userId, async (db) => {
+        for (const raw of body.rows) {
+          const { row, ...rest } = raw as { row: number } & Record<string, unknown>;
+          const parsed = rowSchema.safeParse(rest);
+          if (!parsed.success) {
+            errors.push({ row, message: parsed.error.issues.map((i) => i.message).join('; ') });
+            continue;
+          }
+          const q = parsed.data;
+          const ok1 = await db.query(
+            'select 1 from public.subjects where organization_id = $1 and id = $2 and deleted_at is null',
+            [org(req), q.subjectId],
+          );
+          if (!ok1.rowCount) {
+            errors.push({ row, message: 'Subject not found.' });
+            continue;
+          }
+          if (q.topicId) {
+            const t = await db.query(
+              'select 1 from public.topics where organization_id = $1 and id = $2 and subject_id = $3 and deleted_at is null',
+              [org(req), q.topicId, q.subjectId],
+            );
+            if (!t.rowCount) {
+              errors.push({ row, message: 'The topic does not belong to this subject.' });
+              continue;
+            }
+          }
+          await db.query('savepoint q_row');
+          try {
+            const id = (
+              await db.query(
+                `insert into public.questions (organization_id, subject_id, topic_id, question_type, question_text,
+                   difficulty, marks, negative_marks, explanation, owner_type, status)
+                 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'draft') returning id`,
+                [
+                  org(req),
+                  q.subjectId,
+                  q.topicId ?? null,
+                  q.questionType,
+                  q.questionText,
+                  q.difficulty,
+                  q.marks,
+                  q.negativeMarks,
+                  q.explanation ?? null,
+                  isAdmin ? 'organization' : 'teacher',
+                ],
+              )
+            ).rows[0].id as string;
+            await writeContent(db, org(req), id, q.options, q.correctOption);
+            if (body.publish)
+              await db.query(
+                `update public.questions set status = 'published' where organization_id = $1 and id = $2`,
+                [org(req), id],
+              );
+            await db.query('release savepoint q_row');
+            created++;
+          } catch (err) {
+            await db.query('rollback to savepoint q_row');
+            errors.push({ row, message: err instanceof Error ? err.message : 'Could not save this row.' });
+          }
+        }
+      });
+      await audit(d.pool, req, 'QUESTIONS_IMPORTED', 'questions', null, {
+        created,
+        failed: errors.length,
+        published: body.publish,
+      });
+      return ok({ created, errors }, req.id);
     },
   );
 

@@ -178,7 +178,15 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           await db.query(
             `select s.id, s.code, s.name, s.status, s.course_id as "courseId",
                (select count(*)::int from public.questions q where q.organization_id = s.organization_id
-                  and q.subject_id = s.id and q.deleted_at is null) as "questionCount"
+                  and q.subject_id = s.id and q.deleted_at is null) as "questionCount",
+               (select json_build_object(
+                  'published', count(*) filter (where q.status = 'published'),
+                  'draft', count(*) filter (where q.status = 'draft'),
+                  'easy', count(*) filter (where q.difficulty = 'easy'),
+                  'medium', count(*) filter (where q.difficulty = 'medium'),
+                  'hard', count(*) filter (where q.difficulty = 'hard'))
+                from public.questions q where q.organization_id = s.organization_id
+                  and q.subject_id = s.id and q.deleted_at is null) as "questionStats"
              from public.subjects s where s.organization_id = $1 and s.deleted_at is null
              order by s.name, s.id limit $2`,
             o,
