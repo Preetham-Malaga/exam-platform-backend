@@ -69,6 +69,38 @@ export function withTokenCache(
  * as "We could not create the account", the "Unable to create organization" bug: the usual cause was Supabase's
  * built-in mailer limit (a few e-mails an hour) until the project has its own SMTP server.
  */
+/** Supabase invite failures with their real reason (the most common: the built-in mailer's hourly limit). */
+export function inviteError(error: {
+  code?: string | undefined;
+  message: string;
+  status?: number | undefined;
+}): AppError {
+  const code = error.code ?? '';
+  if (
+    code === 'over_email_send_rate_limit' ||
+    code === 'over_request_rate_limit' ||
+    error.status === 429
+  )
+    return new AppError(
+      429,
+      'EMAIL_RATE_LIMITED',
+      "The invitation e-mail can't be sent right now: too many e-mails were sent in the last hour. Try again later, or set up your own e-mail provider (SMTP) in Supabase.",
+    );
+  if (code === 'email_address_invalid' || code === 'email_address_not_authorized')
+    return new AppError(
+      400,
+      'EMAIL_INVALID',
+      'This e-mail address cannot receive mail. Use a real address.',
+      undefined,
+      'email',
+    );
+  return new AppError(
+    502,
+    'INVITE_FAILED',
+    `The invitation e-mail could not be sent (${error.message || code || 'unknown reason'}).`,
+  );
+}
+
 export function signUpError(error: {
   code?: string | undefined;
   message: string;
@@ -183,12 +215,7 @@ export function createSupabaseGateway(opts: {
     },
     async inviteUser(email, redirectTo) {
       const { data, error } = await admin.auth.admin.inviteUserByEmail(email, { redirectTo });
-      if (error || !data.user)
-        throw new AppError(
-          400,
-          'INVITE_FAILED',
-          'We could not send the invitation. Please check the email address.',
-        );
+      if (error || !data.user) throw inviteError(error ?? { message: 'No user returned.' });
       return { id: data.user.id };
     },
     async deleteUser(id) {

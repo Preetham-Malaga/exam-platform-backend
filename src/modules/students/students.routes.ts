@@ -208,21 +208,37 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
             ],
           )
         ).rows[0].id as string;
-      const id =
-        body.invite && body.email
-          ? await linkLogin(
-              d,
-              org(req),
-              req.ctx.userId,
-              STUDENT,
-              { id: null, email: body.email, fullName: body.fullName },
-              insert,
-            )
-          : await withUser(d.pool, req.ctx.userId, (db) => insert(db, null));
+      // If only the invitation e-mail fails (mailer limit, mail server down), the student is still saved without a
+      // login and the reply says why; the invitation can be sent again from the student's row.
+      let inviteError: { code: string; message: string } | null = null;
+      let id: string;
+      try {
+        id =
+          body.invite && body.email
+            ? await linkLogin(
+                d,
+                org(req),
+                req.ctx.userId,
+                STUDENT,
+                { id: null, email: body.email, fullName: body.fullName },
+                insert,
+              )
+            : await withUser(d.pool, req.ctx.userId, (db) => insert(db, null));
+      } catch (err) {
+        if (
+          !(err instanceof AppError) ||
+          !['EMAIL_RATE_LIMITED', 'INVITE_FAILED'].includes(err.code)
+        )
+          throw err;
+        inviteError = { code: err.code, message: err.message };
+        id = await withUser(d.pool, req.ctx.userId, (db) => insert(db, null));
+      }
       const student = await withUser(d.pool, req.ctx.userId, (db) => getStudent(db, org(req), id));
-      await audit(d.pool, req, 'STUDENT_CREATED', 'students', id, { invited: body.invite });
+      await audit(d.pool, req, 'STUDENT_CREATED', 'students', id, {
+        invited: body.invite && !inviteError,
+      });
       reply.code(201);
-      return ok(student, req.id);
+      return ok({ ...student, inviteError }, req.id);
     },
   );
 

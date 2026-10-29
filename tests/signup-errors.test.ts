@@ -1,6 +1,6 @@
 // Regression for "Unable to create organization": Supabase sign-up errors keep their real reason and point at a field.
 import { describe, expect, it } from 'vitest';
-import { signUpError } from '../src/auth/gateway.js';
+import { inviteError, signUpError } from '../src/auth/gateway.js';
 import { fail } from '../src/utils/response.js';
 
 describe('sign-up errors from Supabase Auth', () => {
@@ -42,5 +42,17 @@ describe('sign-up errors from Supabase Auth', () => {
       field: 'email',
     });
     expect(fail('X', 'm', 'r1').error).toEqual({ code: 'X', message: 'm' });
+  });
+});
+
+describe('invitation errors from Supabase Auth', () => {
+  it('the mailer limit says so; other failures keep their real reason', () => {
+    const limited = inviteError({ code: 'over_email_send_rate_limit', message: 'x', status: 429 });
+    expect([limited.status, limited.code]).toEqual([429, 'EMAIL_RATE_LIMITED']);
+    expect(limited.message).toMatch(/too many e-mails/);
+    const other = inviteError({ message: 'Error sending invite email' });
+    expect([other.status, other.code]).toEqual([502, 'INVITE_FAILED']);
+    expect(other.message).toContain('Error sending invite email');
+    expect(inviteError({ code: 'email_address_invalid', message: 'bad' }).field).toBe('email');
   });
 });
