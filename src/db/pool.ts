@@ -5,8 +5,17 @@
 
 import pg from 'pg';
 
-export function createPool(connectionString: string): pg.Pool {
-  return new pg.Pool({
+/**
+ * `onError` hears about idle connections the network dropped (e.g. ECONNRESET from the hosted pooler). The pool replaces
+ * them; without a listener Node treats the event as unhandled and the whole server process exits.
+ */
+export function createPool(
+  connectionString: string,
+  onError: (err: Error) => void = (err) =>
+    process.stderr.write(`database connection dropped: ${err.message}
+`),
+): pg.Pool {
+  const pool = new pg.Pool({
     connectionString,
     max: 10,
     // Opening a connection to the hosted database takes seconds (TLS + pooler), so idle connections are kept for
@@ -19,4 +28,6 @@ export function createPool(connectionString: string): pg.Pool {
     // Server-side limit for the same, so the database also stops working on it.
     statement_timeout: 30_000,
   });
+  pool.on('error', onError);
+  return pool;
 }
