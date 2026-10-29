@@ -24,11 +24,12 @@ import {
   statusSchema,
   withTotal,
 } from './shared.js';
+import { courseDetailsSchema, subjectDetailsSchema, topicDetailsSchema } from './details.js';
 
 const order = (o: string) => (o === 'desc' ? 'desc' : 'asc');
 
 // ---------- courses ----------
-const COURSE_COLUMNS = `c.id, c.code, c.name, c.description, c.status, c.academic_unit_id as "academicUnitId",
+const COURSE_COLUMNS = `c.id, c.code, c.name, c.description, c.status, c.details, c.academic_unit_id as "academicUnitId",
   u.name as "academicUnitName",
   (select count(*)::int from public.subjects s where s.organization_id = c.organization_id
      and s.course_id = c.id and s.deleted_at is null) as "subjectCount",
@@ -46,6 +47,7 @@ const courseCreate = z
     name: nameSchema,
     description: descriptionSchema.optional(),
     academicUnitId: z.uuid().nullable().optional(),
+    details: courseDetailsSchema.optional(),
   })
   .strict();
 const courseUpdate = z
@@ -55,12 +57,13 @@ const courseUpdate = z
     description: descriptionSchema,
     academicUnitId: z.uuid().nullable(),
     status: statusSchema,
+    details: courseDetailsSchema,
   })
   .partial()
   .strict();
 
 // ---------- subjects ----------
-const SUBJECT_COLUMNS = `s.id, s.code, s.name, s.description, s.status,
+const SUBJECT_COLUMNS = `s.id, s.code, s.name, s.description, s.status, s.details,
   s.course_id as "courseId", c.name as "courseName",
   s.academic_unit_id as "academicUnitId", u.name as "academicUnitName",
   (select count(*)::int from public.topics t where t.organization_id = s.organization_id
@@ -81,6 +84,7 @@ const subjectCreate = z
     description: descriptionSchema.optional(),
     courseId: z.uuid().nullable().optional(),
     academicUnitId: z.uuid().nullable().optional(),
+    details: subjectDetailsSchema.optional(),
   })
   .strict();
 const subjectUpdate = z
@@ -91,12 +95,13 @@ const subjectUpdate = z
     courseId: z.uuid().nullable(),
     academicUnitId: z.uuid().nullable(),
     status: statusSchema,
+    details: subjectDetailsSchema,
   })
   .partial()
   .strict();
 
 // ---------- topics ----------
-const TOPIC_COLUMNS = `t.id, t.subject_id as "subjectId", s.name as "subjectName", t.name, t.position,
+const TOPIC_COLUMNS = `t.id, t.subject_id as "subjectId", s.name as "subjectName", t.name, t.position, t.details,
   t.created_at as "createdAt", t.updated_at as "updatedAt"`;
 const TOPIC_FROM = `public.topics t
   join public.subjects s on s.organization_id = t.organization_id and s.id = t.subject_id`;
@@ -107,9 +112,17 @@ const TOPIC_SORT: Record<string, string> = {
 };
 const position = z.number().int().min(0).max(10000);
 const topicCreate = z
-  .object({ subjectId: z.uuid(), name: nameSchema, position: position.optional() })
+  .object({
+    subjectId: z.uuid(),
+    name: nameSchema,
+    position: position.optional(),
+    details: topicDetailsSchema.optional(),
+  })
   .strict();
-const topicUpdate = z.object({ name: nameSchema, position }).partial().strict();
+const topicUpdate = z
+  .object({ name: nameSchema, position, details: topicDetailsSchema })
+  .partial()
+  .strict();
 
 async function getOne(db: Db, sql: string, org: string, id: string, label: string) {
   const r = await db.query(sql, [org, id]);
@@ -252,9 +265,16 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           await assertActive(db, 'academic_units', org(req), body.academicUnitId, 'Unit');
         const id = (
           await db.query(
-            `insert into public.courses (organization_id, code, name, description, academic_unit_id)
-             values ($1,$2,$3,$4,$5) returning id`,
-            [org(req), body.code, body.name, body.description ?? null, body.academicUnitId ?? null],
+            `insert into public.courses (organization_id, code, name, description, academic_unit_id, details)
+             values ($1,$2,$3,$4,$5,$6) returning id`,
+            [
+              org(req),
+              body.code,
+              body.name,
+              body.description ?? null,
+              body.academicUnitId ?? null,
+              body.details ?? {},
+            ],
           )
         ).rows[0].id as string;
         return getCourse(db, org(req), id);
@@ -277,6 +297,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         description: 'description',
         academicUnitId: 'academic_unit_id',
         status: 'status',
+        details: 'details',
       });
       const course = await withUser(d.pool, req.ctx.userId, async (db) => {
         if (body.academicUnitId)
@@ -389,8 +410,8 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           await assertActive(db, 'academic_units', org(req), body.academicUnitId, 'Unit');
         const id = (
           await db.query(
-            `insert into public.subjects (organization_id, code, name, description, course_id, academic_unit_id)
-             values ($1,$2,$3,$4,$5,$6) returning id`,
+            `insert into public.subjects (organization_id, code, name, description, course_id, academic_unit_id, details)
+             values ($1,$2,$3,$4,$5,$6,$7) returning id`,
             [
               org(req),
               body.code,
@@ -398,6 +419,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
               body.description ?? null,
               body.courseId ?? null,
               body.academicUnitId ?? null,
+              body.details ?? {},
             ],
           )
         ).rows[0].id as string;
@@ -422,6 +444,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         courseId: 'course_id',
         academicUnitId: 'academic_unit_id',
         status: 'status',
+        details: 'details',
       });
       const subject = await withUser(d.pool, req.ctx.userId, async (db) => {
         if (body.courseId) await assertActive(db, 'courses', org(req), body.courseId, 'Course');
@@ -523,8 +546,9 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           ).rows[0].p as number);
         const id = (
           await db.query(
-            `insert into public.topics (organization_id, subject_id, name, position) values ($1,$2,$3,$4) returning id`,
-            [org(req), body.subjectId, body.name, pos],
+            `insert into public.topics (organization_id, subject_id, name, position, details)
+             values ($1,$2,$3,$4,$5) returning id`,
+            [org(req), body.subjectId, body.name, pos, body.details ?? {}],
           )
         ).rows[0].id as string;
         return getTopic(db, org(req), id);
@@ -541,7 +565,11 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
     async (req) => {
       const { id } = idParams.parse(req.params);
       const body = topicUpdate.parse(req.body);
-      const { sets, vals } = buildSet(body, { name: 'name', position: 'position' });
+      const { sets, vals } = buildSet(body, {
+        name: 'name',
+        position: 'position',
+        details: 'details',
+      });
       const topic = await withUser(d.pool, req.ctx.userId, async (db) => {
         if (sets.length) {
           vals.push(req.ctx.userId, org(req), id);
