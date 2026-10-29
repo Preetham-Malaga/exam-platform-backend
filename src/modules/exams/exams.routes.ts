@@ -83,7 +83,9 @@ const SORT: Record<string, string> = {
   startAt: 'e.start_at',
   createdAt: 'e.created_at',
 };
-const COLUMNS = `e.id, e.exam_code as "examCode", e.name, e.description, e.status,
+const STATE_SQL = `case when e.status in ('draft', 'unpublished') then 'draft'
+  when e.status = 'published' and (e.end_at is null or e.end_at > now()) then 'published' else 'closed' end`;
+const COLUMNS = `e.id, e.exam_code as "examCode", e.name, e.description, e.status, ${STATE_SQL} as state,
   e.course_id as "courseId", c.name as "courseName", e.duration_minutes as "durationMinutes",
   e.passing_percentage::float as "passingPercentage", e.start_at as "startAt", e.end_at as "endAt",
   (select count(*)::int from public.exam_questions q where q.exam_id = e.id) as "questionCount",
@@ -160,6 +162,7 @@ export function registerExamRoutes(app: FastifyInstance, d: Deps): void {
       const f = z
         .object({
           status: z.enum(STATUS).optional(),
+          state: z.enum(['draft', 'published', 'closed']).optional(),
           courseId: z.uuid().optional(),
           mine: z.enum(['true', 'false']).optional(),
         })
@@ -168,28 +171,40 @@ export function registerExamRoutes(app: FastifyInstance, d: Deps): void {
       const where = ['e.organization_id = $1', 'e.deleted_at is null'];
       if (f.status) where.push(`e.status = $${params.push(f.status)}`);
       if (f.courseId) where.push(`e.course_id = $${params.push(f.courseId)}`);
+      // Tab counts ignore the tab itself, so every tab shows how many it holds.
+      const countWhere = [...where];
+      const countParams = [...params];
+      if (f.state) where.push(`${STATE_SQL} = $${params.push(f.state)}`);
       if (f.mine === 'true') where.push(`e.created_by = $${params.push(req.ctx.userId)}`);
       if (q.search) {
         const p = params.push(likePattern(q.search));
         where.push(`(e.name ilike $${p} or e.exam_code ilike $${p})`);
       }
       params.push(q.pageSize, (q.page - 1) * q.pageSize);
-      const rows = await withUser(
-        d.pool,
-        req.ctx.userId,
-        async (db) =>
-          (
-            await db.query(
-              `select ${COLUMNS}, count(*) over() as "__total" from ${FROM}
+      if (f.mine === 'true') countWhere.push(`e.created_by = $${countParams.push(req.ctx.userId)}`);
+      if (q.search) {
+        const p = countParams.push(likePattern(q.search));
+        countWhere.push(`(e.name ilike $${p} or e.exam_code ilike $${p})`);
+      }
+      let counts: Record<string, number> = { draft: 0, published: 0, closed: 0 };
+      const rows = await withUser(d.pool, req.ctx.userId, async (db) => {
+        const c = await db.query(
+          `select ${STATE_SQL} as state, count(*)::int as n from public.exams e where ${countWhere.join(' and ')} group by 1`,
+          countParams,
+        );
+        counts = { ...counts, ...Object.fromEntries(c.rows.map((r) => [r.state, r.n])) };
+        return (
+          await db.query(
+            `select ${COLUMNS}, count(*) over() as "__total" from ${FROM}
              where ${where.join(' and ')}
              order by ${SORT[q.sort ?? 'createdAt'] ?? SORT.createdAt} ${q.order === 'asc' ? 'asc' : 'desc'} nulls last, e.id
              limit $${params.length - 1} offset $${params.length}`,
-              params,
-            )
-          ).rows,
-      );
+            params,
+          )
+        ).rows;
+      });
       const { items, total } = withTotal(rows);
-      return ok(paginate(items, total, q), req.id);
+      return ok({ ...paginate(items, total, q), counts }, req.id);
     },
   );
 
@@ -402,6 +417,61 @@ export function registerExamRoutes(app: FastifyInstance, d: Deps): void {
         return getExam(db, org(req), id);
       });
       await audit(d.pool, req, 'EXAM_PUBLISHED', 'exams', id);
+      return ok(exam, req.id);
+    },
+  );
+
+  app.post(
+    `${API}/exams/:id/duplicate`,
+    { preHandler: [d.authenticate, requirePermission('exam.create')] },
+    async (req, reply) => {
+      const { id } = idParams.parse(req.params);
+      const exam = await withUser(d.pool, req.ctx.userId, async (db) => {
+        const src = await getExam(db, org(req), id);
+        const base = String(src.examCode).slice(0, 44);
+        let code = `${base}-2`;
+        for (let n = 2; n < 100; n++) {
+          code = `${base}-${n}`;
+          const taken = await db.query(
+            'select 1 from public.exams where organization_id = $1 and lower(exam_code) = lower($2) and deleted_at is null',
+            [org(req), code],
+          );
+          if (!taken.rowCount) break;
+        }
+        const newId = (
+          await db.query(
+            `insert into public.exams (organization_id, course_id, name, exam_code, description, duration_minutes,
+               passing_percentage)
+             select organization_id, course_id, left(name || ' (copy)', 200), $3, description, duration_minutes,
+               passing_percentage
+             from public.exams where organization_id = $1 and id = $2 returning id`,
+            [org(req), id, code],
+          )
+        ).rows[0].id as string;
+        await db.query(
+          `insert into public.exam_settings (organization_id, exam_id, max_attempts, randomize_questions,
+             randomize_options, show_results, show_answers, leaderboard_enabled)
+           select organization_id, $3, max_attempts, randomize_questions, randomize_options, show_results,
+             show_answers, leaderboard_enabled
+           from public.exam_settings where organization_id = $1 and exam_id = $2`,
+          [org(req), id, newId],
+        );
+        await db.query(
+          `insert into public.exam_questions (organization_id, exam_id, question_id, position, marks, negative_marks)
+           select organization_id, $3, question_id, position, marks, negative_marks
+           from public.exam_questions where organization_id = $1 and exam_id = $2`,
+          [org(req), id, newId],
+        );
+        await db.query(
+          `insert into public.exam_assignments (organization_id, exam_id, target_type, target_id)
+           select organization_id, $3, target_type, target_id
+           from public.exam_assignments where organization_id = $1 and exam_id = $2`,
+          [org(req), id, newId],
+        );
+        return getExam(db, org(req), newId);
+      });
+      await audit(d.pool, req, 'EXAM_DUPLICATED', 'exams', exam.id as string, { from: id });
+      reply.code(201);
       return ok(exam, req.id);
     },
   );
