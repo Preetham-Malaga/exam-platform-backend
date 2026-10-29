@@ -25,6 +25,7 @@ import { registerAttemptRoutes } from './modules/attempts/attempts.routes.js';
 import { registerExamRoutes } from './modules/exams/exams.routes.js';
 import { registerQuestionRoutes } from './modules/questions/questions.routes.js';
 import { registerInsightRoutes } from './modules/results/insights.routes.js';
+import { registerOverviewRoutes } from './modules/results/overview.routes.js';
 import { registerStudentRoutes } from './modules/students/students.routes.js';
 import { registerTeacherRoutes } from './modules/teachers/teachers.routes.js';
 import type { RequestContext } from './types/context.js';
@@ -122,6 +123,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerExamRoutes(app, deps);
   registerAttemptRoutes(app, deps);
   registerInsightRoutes(app, deps);
+  registerOverviewRoutes(app, deps);
 
   return app;
 }

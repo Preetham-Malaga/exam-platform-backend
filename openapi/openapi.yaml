@@ -1198,6 +1198,29 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
+  /organizations/current/overview:
+    get:
+      tags:
+        - organizations
+      summary: GET /organizations/current/overview
+      operationId: getOrganizationsCurrentOverview
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
   /organizations/current/settings:
     patch:
       tags:
