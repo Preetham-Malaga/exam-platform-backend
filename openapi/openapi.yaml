@@ -13,6 +13,7 @@ tags:
   - name: academic-units
   - name: attempts
   - name: auth
+  - name: catalog
   - name: courses
   - name: exams
   - name: health
@@ -526,6 +527,29 @@ paths:
             schema:
               type: object
               additionalProperties: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /catalog/tree:
+    get:
+      tags:
+        - catalog
+      summary: GET /catalog/tree
+      operationId: getCatalogTree
       responses:
         "200":
           description: Success

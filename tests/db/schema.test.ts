@@ -53,6 +53,7 @@ const EXPECTED_FILES = [
   '040_leaderboard_privacy',
   '041_app_functions_lockdown',
   '042_academic_structure',
+  '043_organization_approval',
 ].map((n) => `${n}.sql`);
 
 // Tables that carry organization_id but intentionally do not follow every rule (documented in docs/database.md).

@@ -6,7 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withUser, type Db } from '../../db/context.js';
-import { requirePermission } from '../../middleware/authorization.js';
+import { requireAnyPermission, requirePermission } from '../../middleware/authorization.js';
 import { audit } from '../../utils/audit.js';
 import { notFound } from '../../utils/errors.js';
 import { likePattern, listQuerySchema, paginate } from '../../utils/pagination.js';
@@ -143,6 +143,55 @@ const getTopic = (db: Db, org: string, id: string) =>
 
 export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): void {
   const org = (req: { ctx: { organization: { id: string } | null } }) => req.ctx.organization!.id;
+
+  // ================= one-call tree for the Courses screen =================
+  // Courses → subjects → topics with question counts, in one round trip (the database is far away; three paged lists
+  // plus per-subject counts would take seconds). Runs as the caller, so RLS still limits what a teacher sees.
+  app.get(
+    `${API}/catalog/tree`,
+    { preHandler: [d.authenticate, requireAnyPermission('course.read', 'subject.read')] },
+    async (req) => {
+      const LIMIT = 3000;
+      const data = await withUser(d.pool, req.ctx.userId, async (db) => {
+        const o = [org(req), LIMIT + 1];
+        const courses = (
+          await db.query(
+            `select c.id, c.code, c.name, c.status from public.courses c
+             where c.organization_id = $1 and c.deleted_at is null order by c.name, c.id limit $2`,
+            o,
+          )
+        ).rows;
+        const subjects = (
+          await db.query(
+            `select s.id, s.code, s.name, s.status, s.course_id as "courseId",
+               (select count(*)::int from public.questions q where q.organization_id = s.organization_id
+                  and q.subject_id = s.id and q.deleted_at is null) as "questionCount"
+             from public.subjects s where s.organization_id = $1 and s.deleted_at is null
+             order by s.name, s.id limit $2`,
+            o,
+          )
+        ).rows;
+        const topics = (
+          await db.query(
+            `select t.id, t.name, t.subject_id as "subjectId", t.position,
+               (select count(*)::int from public.questions q where q.organization_id = t.organization_id
+                  and q.topic_id = t.id and q.deleted_at is null) as "questionCount"
+             from public.topics t where t.organization_id = $1 and t.deleted_at is null
+             order by t.position, t.name, t.id limit $2`,
+            o,
+          )
+        ).rows;
+        const truncated = [courses, subjects, topics].some((r) => r.length > LIMIT);
+        return {
+          courses: courses.slice(0, LIMIT),
+          subjects: subjects.slice(0, LIMIT),
+          topics: topics.slice(0, LIMIT),
+          truncated,
+        };
+      });
+      return ok(data, req.id);
+    },
+  );
 
   // ================= courses =================
   app.get(
