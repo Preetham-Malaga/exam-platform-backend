@@ -20,6 +20,7 @@ import { registerAcademicStructureRoutes } from './modules/academic/structure.ro
 import { registerAuthRoutes } from './modules/auth/auth.routes.js';
 import { registerUserRoutes } from './modules/users/users.routes.js';
 import { registerOrganizationRoutes } from './modules/organizations/organizations.routes.js';
+import { registerPlatformRoutes } from './modules/platform/platform.routes.js';
 import { registerAttemptRoutes } from './modules/attempts/attempts.routes.js';
 import { registerExamRoutes } from './modules/exams/exams.routes.js';
 import { registerQuestionRoutes } from './modules/questions/questions.routes.js';
@@ -111,6 +112,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   };
   registerAuthRoutes(app, deps);
   registerOrganizationRoutes(app, deps);
+  registerPlatformRoutes(app, deps);
   registerUserRoutes(app, deps);
   registerAcademicStructureRoutes(app, deps);
   registerAcademicCatalogRoutes(app, deps);

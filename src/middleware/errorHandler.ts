@@ -23,7 +23,13 @@ export function registerErrorHandling(app: FastifyInstance): void {
       return reply
         .code(400)
         .send(
-          fail('VALIDATION_ERROR', 'Please correct the highlighted fields.', request.id, details),
+          fail(
+            'VALIDATION_ERROR',
+            'Please correct the highlighted fields.',
+            request.id,
+            details,
+            details[0]?.path || undefined,
+          ),
         );
     }
     const known = error instanceof AppError ? error : fromDatabaseError(error);
@@ -31,7 +37,7 @@ export function registerErrorHandling(app: FastifyInstance): void {
       request.log.warn({ code: known.code, status: known.status }, 'request rejected');
       return reply
         .code(known.status)
-        .send(fail(known.code, known.message, request.id, known.details));
+        .send(fail(known.code, known.message, request.id, known.details, known.field));
     }
 
     const fastifyStatus = (error as FastifyError).statusCode;

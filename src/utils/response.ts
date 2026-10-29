@@ -13,11 +13,17 @@ export function fail(
   message: string,
   requestId: string,
   details?: unknown,
+  field?: string,
 ): ApiFailure {
   return {
     success: false,
     data: null,
-    error: details === undefined ? { code, message } : { code, message, details },
+    error: {
+      code,
+      message,
+      ...(field ? { field } : {}),
+      ...(details === undefined ? {} : { details }),
+    },
     requestId,
   };
 }

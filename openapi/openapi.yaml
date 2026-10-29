@@ -19,6 +19,7 @@ tags:
   - name: leaderboards
   - name: me
   - name: organizations
+  - name: platform
   - name: question-types
   - name: questions
   - name: reports
@@ -1179,6 +1180,71 @@ paths:
         - organizations
       summary: Update branding and timezone (settings.update).
       operationId: patchOrganizationsCurrentSettings
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /platform/organizations:
+    get:
+      tags:
+        - platform
+      summary: GET /platform/organizations
+      operationId: getPlatformOrganizations
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/Order"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /platform/organizations/{id}/approve:
+    post:
+      tags:
+        - platform
+      summary: POST /platform/organizations/{id}/approve
+      operationId: postPlatformOrganizationsIdApprove
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
       requestBody:
         required: false
         content:

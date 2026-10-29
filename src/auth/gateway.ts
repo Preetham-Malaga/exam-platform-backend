@@ -64,6 +64,68 @@ export function withTokenCache(
   };
 }
 
+/**
+ * Supabase Auth sign-up errors as clear API errors. Before this, every reason (rate limit, address refused …) came back
+ * as "We could not create the account", the "Unable to create organization" bug: the usual cause was Supabase's
+ * built-in mailer limit (a few e-mails an hour) until the project has its own SMTP server.
+ */
+export function signUpError(error: {
+  code?: string | undefined;
+  message: string;
+  status?: number | undefined;
+}): AppError {
+  const code = error.code ?? '';
+  if (
+    code === 'over_email_send_rate_limit' ||
+    code === 'over_request_rate_limit' ||
+    error.status === 429
+  )
+    return new AppError(
+      429,
+      'EMAIL_RATE_LIMITED',
+      "We can't send the verification e-mail right now because too many were sent recently. Please try again in an hour.",
+    );
+  if (
+    code === 'email_address_invalid' ||
+    code === 'email_address_not_authorized' ||
+    /invalid/i.test(error.message)
+  )
+    return new AppError(
+      400,
+      'EMAIL_INVALID',
+      'This e-mail address cannot receive mail. Use a real address you can open.',
+      undefined,
+      'email',
+    );
+  if (
+    code === 'user_already_exists' ||
+    code === 'email_exists' ||
+    /registered|exists/i.test(error.message)
+  )
+    return new AppError(
+      409,
+      'EMAIL_IN_USE',
+      'An account with this email already exists.',
+      undefined,
+      'email',
+    );
+  if (code === 'weak_password' || /password/i.test(error.message))
+    return new AppError(
+      400,
+      'WEAK_PASSWORD',
+      'Choose a stronger password: at least 8 characters with a letter and a number.',
+      undefined,
+      'password',
+    );
+  if (code === 'signup_disabled')
+    return new AppError(403, 'SIGNUP_DISABLED', 'New sign-ups are switched off for this platform.');
+  return new AppError(
+    400,
+    'SIGNUP_FAILED',
+    `We could not create the account (${code || error.status || 'unknown reason'}). Please try again.`,
+  );
+}
+
 export function createSupabaseGateway(opts: {
   url: string;
   anonKey: string;
@@ -89,24 +151,16 @@ export function createSupabaseGateway(opts: {
         password,
         options: { emailRedirectTo: redirectTo },
       });
-      if (error) {
-        if (/registered|exists/i.test(error.message))
-          throw new AppError(409, 'EMAIL_IN_USE', 'An account with this email already exists.');
-        if (/password/i.test(error.message))
-          throw new AppError(
-            400,
-            'WEAK_PASSWORD',
-            'Choose a stronger password (at least 8 characters).',
-          );
-        throw new AppError(
-          400,
-          'SIGNUP_FAILED',
-          'We could not create the account. Please check the details and try again.',
-        );
-      }
+      if (error) throw signUpError(error);
       // With email confirmation on, an already-registered address returns a user with no identities.
       if (!data.user || (data.user.identities && data.user.identities.length === 0)) {
-        throw new AppError(409, 'EMAIL_IN_USE', 'An account with this email already exists.');
+        throw new AppError(
+          409,
+          'EMAIL_IN_USE',
+          'An account with this email already exists.',
+          undefined,
+          'email',
+        );
       }
       return { id: data.user.id };
     },

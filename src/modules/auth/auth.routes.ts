@@ -24,6 +24,21 @@ export const registerSchema = z.object({
   ownerName: z.string().trim().min(2).max(150),
   email,
   password,
+  // Prototype SPEC.signup. Optional here so older clients keep working; the sign-up form always sends them.
+  city: z.string().trim().min(2).max(100).optional(),
+  state: z.string().trim().min(2).max(100).optional(),
+  mobile: z
+    .string()
+    .trim()
+    .transform((v) => v.replace(/[\s-]/g, ''))
+    .pipe(
+      z
+        .string()
+        .regex(/^(\+?91)?[6-9]\d{9}$/, 'Enter a 10-digit mobile number starting with 6, 7, 8 or 9'),
+    )
+    .optional(),
+  heardFrom: z.string().trim().max(100).optional(),
+  acceptTerms: z.literal(true, 'Accept the Terms of Service and Privacy Policy').optional(),
 });
 
 export function registerAuthRoutes(app: FastifyInstance, d: Deps): void {
@@ -41,6 +56,20 @@ export function registerAuthRoutes(app: FastifyInstance, d: Deps): void {
             body.institutionType,
           ])
         ).rows[0].id as string;
+        await db.query(
+          `update public.organizations
+             set city = $2, state = $3, contact_phone = coalesce($4, contact_phone), heard_from = $5,
+                 terms_accepted_at = case when $6 then now() end
+           where id = $1`,
+          [
+            id,
+            body.city ?? null,
+            body.state ?? null,
+            body.mobile ?? null,
+            body.heardFrom ?? null,
+            body.acceptTerms === true,
+          ],
+        );
         await db.query(
           `insert into public.audit_logs (organization_id, user_id, action, resource, resource_id, ip, request_id) values ($1,$2,'ORGANIZATION_REGISTERED','organizations',$5,$3,$4)`,
           [id, user.id, req.ip, req.id, id],
