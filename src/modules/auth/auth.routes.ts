@@ -95,6 +95,21 @@ export function registerAuthRoutes(app: FastifyInstance, d: Deps): void {
     const c = req.ctx;
     let scopes: Array<{ scopeType: string; scopeId: string; name: string | null }> = [];
     let studentId: string | null = null;
+    // Display preferences of the caller's own organization (theme, date/time format, time zone). Everyone in the
+    // organization needs them, students included, who may not read the organization itself; nothing else is returned.
+    let preferences: Record<string, string | null> | null = null;
+    if (c.organization)
+      preferences =
+        (
+          await withSystem(d.pool, (db) =>
+            db.query(
+              `select branding->>'theme' as theme, branding->>'dateFormat' as "dateFormat",
+                 branding->>'timeFormat' as "timeFormat", branding->>'weekStart' as "weekStart", timezone
+               from public.organization_settings where organization_id = $1`,
+              [c.organization!.id],
+            ),
+          )
+        ).rows[0] ?? null;
     if (c.organization) {
       await withUser(d.pool, c.userId, async (db) => {
         scopes = (
@@ -126,6 +141,7 @@ export function registerAuthRoutes(app: FastifyInstance, d: Deps): void {
         permissions: c.permissions,
         scopes,
         studentId,
+        preferences,
       },
       req.id,
     );
