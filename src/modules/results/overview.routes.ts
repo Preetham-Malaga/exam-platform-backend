@@ -143,6 +143,17 @@ async function overview(db: Db, org: string, f: OverviewFilter) {
      order by r.percentage desc, r.evaluated_at asc limit 3`,
     p,
   );
+  // Live classes today for the chosen batch (migration 046); 'live now' = from 10 minutes before the start to the end.
+  const live = await one(
+    `select count(*)::int as today,
+       count(*) filter (where now() between x.starts_at - interval '10 minutes'
+                          and x.starts_at + make_interval(mins => x.duration_minutes))::int as "liveNow"
+     from public.live_classes x
+     where x.organization_id = $1 and x.deleted_at is null and x.status = 'scheduled'
+       and ($2::uuid is null or x.batch_id = $2)
+       and (x.starts_at at time zone '${zone}')::date = ${today}`,
+    [org, f.batch ?? null],
+  );
   const teachers = await many(
     `select t.id, t.full_name as name, t.email, (t.user_id is not null) as "hasLogin"
      from public.teachers t where t.organization_id = $1 and t.deleted_at is null and t.status = 'active'
@@ -165,8 +176,8 @@ async function overview(db: Db, org: string, f: OverviewFilter) {
       averagePercentage: results.averagePercentage ?? null,
       passed: n(results.passed),
       passRate: resCount ? Math.round((100 * n(results.passed)) / resCount) : null,
-      // Live classes arrive with the Learning screens (step 8).
-      liveToday: null,
+      liveToday: n(live.today),
+      liveNow: n(live.liveNow),
     },
     flow: {
       courses: { ...catalog },
