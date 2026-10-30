@@ -44,7 +44,7 @@ const settingsSchema = z
       .trim()
       .min(1)
       .max(60)
-      .regex(/^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$/, 'Use a time zone name like Asia/Kolkata.')
+      .regex(/^[A-Za-z_]+(\/[A-Za-z0-9_+-]+)*$/, 'Use a time zone name like Asia/Kolkata.')
       .optional(),
   })
   .strict();
