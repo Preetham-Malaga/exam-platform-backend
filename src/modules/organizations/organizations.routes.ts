@@ -30,10 +30,22 @@ const settingsSchema = z
           .regex(/^#[0-9a-fA-F]{6}$/)
           .optional(),
         tagline: z.string().trim().max(200).optional(),
+        /** Colour theme for everyone in the organization (prototype Settings › Branding). */
+        theme: z.enum(['violet', 'ocean', 'forest', 'sunset']).optional(),
+        /** Prototype Settings › Date & time: used by every table, window, schedule and PDF. */
+        dateFormat: z.enum(['DD-MM-YYYY', 'DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD', 'DD MMM YYYY']).optional(),
+        timeFormat: z.enum(['12', '24']).optional(),
+        weekStart: z.enum(['Monday', 'Sunday']).optional(),
       })
       .strict()
       .optional(),
-    timezone: z.string().trim().min(1).max(60).optional(),
+    timezone: z
+      .string()
+      .trim()
+      .min(1)
+      .max(60)
+      .regex(/^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$/, 'Use a time zone name like Asia/Kolkata.')
+      .optional(),
   })
   .strict();
 
@@ -104,7 +116,7 @@ export function registerOrganizationRoutes(app: FastifyInstance, d: Deps): void 
       const body = settingsSchema.parse(req.body);
       const r = await withUser(d.pool, req.ctx.userId, (db) =>
         db.query(
-          `update public.organization_settings set branding = coalesce($1::jsonb, branding), timezone = coalesce($2, timezone), updated_by = $3
+          `update public.organization_settings set branding = branding || coalesce($1::jsonb, '{}'::jsonb), timezone = coalesce($2, timezone), updated_by = $3
        where organization_id = $4 returning branding, timezone`,
           [
             body.branding ? JSON.stringify(body.branding) : null,
