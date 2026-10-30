@@ -41,6 +41,7 @@ const createSchema = z
     email: personEmailSchema.nullable().optional(),
     phone: personPhoneSchema.optional(),
     academicUnitId: z.uuid().nullable().optional(),
+    batchId: z.uuid().nullable().optional(),
     /** Create the login and send the invitation e-mail now. */
     invite: z.boolean().default(false),
   })
@@ -52,6 +53,7 @@ const updateSchema = z
     email: personEmailSchema.nullable(),
     phone: personPhoneSchema,
     academicUnitId: z.uuid().nullable(),
+    batchId: z.uuid().nullable(),
     status: statusSchema,
   })
   .partial()
@@ -83,10 +85,12 @@ const SORT: Record<string, string> = {
 };
 const COLUMNS = `s.id, s.roll_number as "rollNumber", s.full_name as "fullName", s.email, s.phone, s.status,
   s.academic_unit_id as "academicUnitId", u.name as "academicUnitName",
+  s.batch_id as "batchId", bt.name as "batchName",
   s.user_id as "userId", m.status as "accountStatus",
   s.created_at as "createdAt", s.updated_at as "updatedAt"`;
 const FROM = `public.students s
   left join public.academic_units u on u.organization_id = s.organization_id and u.id = s.academic_unit_id
+  left join public.batches bt on bt.organization_id = s.organization_id and bt.id = s.batch_id
   left join public.organization_members m on m.organization_id = s.organization_id and m.user_id = s.user_id`;
 
 type Row = Record<string, unknown>;
@@ -107,6 +111,17 @@ interface ImportFailure {
   message: string;
 }
 
+/** The batch exists in the caller's organization (a clear 404 instead of a foreign-key error). */
+async function assertBatch(d: Deps, userId: string, org: string, batchId: string): Promise<void> {
+  const found = await withUser(d.pool, userId, (db) =>
+    db.query(
+      'select 1 from public.batches where organization_id = $1 and id = $2 and deleted_at is null',
+      [org, batchId],
+    ),
+  );
+  if (!found.rowCount) throw notFound('Batch');
+}
+
 export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
   const org = (req: { ctx: { organization: { id: string } | null } }) => req.ctx.organization!.id;
 
@@ -122,11 +137,16 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
           academicUnitId: z.uuid().optional(),
           /** Students not placed on any unit yet. */
           unplaced: z.enum(['true', 'false']).optional(),
+          batchId: z.uuid().optional(),
+          /** Students without a batch (they receive no batch-assigned exams, classes or materials). */
+          noBatch: z.enum(['true', 'false']).optional(),
         })
         .parse(req.query);
       const params: unknown[] = [org(req)];
       const where = ['s.organization_id = $1', 's.deleted_at is null'];
       if (f.status) where.push(`s.status = $${params.push(f.status)}`);
+      if (f.noBatch === 'true') where.push('s.batch_id is null');
+      else if (f.batchId) where.push(`s.batch_id = $${params.push(f.batchId)}`);
       if (f.unplaced === 'true') where.push('s.academic_unit_id is null');
       else if (f.academicUnitId) {
         const p = params.push(f.academicUnitId);
@@ -190,12 +210,13 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
         await withUser(d.pool, req.ctx.userId, (db) =>
           assertActive(db, 'academic_units', org(req), body.academicUnitId!, 'Unit'),
         );
+      if (body.batchId) await assertBatch(d, req.ctx.userId, org(req), body.batchId);
       const insert = async (db: Db, userId: string | null) =>
         (
           await db.query(
             `insert into public.students
-               (organization_id, user_id, roll_number, full_name, email, phone, academic_unit_id, created_by)
-             values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
+               (organization_id, user_id, roll_number, full_name, email, phone, academic_unit_id, created_by, batch_id)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
             [
               org(req),
               userId,
@@ -205,6 +226,7 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
               body.phone ?? null,
               body.academicUnitId ?? null,
               req.ctx.userId,
+              body.batchId ?? null,
             ],
           )
         ).rows[0].id as string;
@@ -381,8 +403,10 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
         email: 'email',
         phone: 'phone',
         academicUnitId: 'academic_unit_id',
+        batchId: 'batch_id',
         status: 'status',
       });
+      if (body.batchId) await assertBatch(d, req.ctx.userId, org(req), body.batchId);
       const student = await withUser(d.pool, req.ctx.userId, async (db) => {
         const current = await getStudent(db, org(req), id);
         if (current.userId && body.email !== undefined && body.email !== current.email)
