@@ -9,6 +9,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
+/** sha256 of the file as stored, and of its LF / CRLF forms: Git may convert line endings on checkout (Windows). */
+const sha = (t) => createHash('sha256').update(t).digest('hex');
+const sameExceptLineEndings = (sql, stored) =>
+  [sql, sql.replace(/\r\n/g, '\n'), sql.replace(/\r?\n/g, '\r\n')].some((t) => sha(t) === stored);
+
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -40,7 +45,8 @@ try {
     const sql = readFileSync(join(dir, file), 'utf8');
     const checksum = createHash('sha256').update(sql).digest('hex');
     if (done.has(file)) {
-      if (done.get(file) !== checksum)
+      // A file whose only change is its line endings (CRLF vs LF) is the same migration.
+      if (!sameExceptLineEndings(sql, done.get(file)))
         throw new Error(
           `Migration ${file} was changed after it was applied. Create a new migration instead.`,
         );
