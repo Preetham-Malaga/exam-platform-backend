@@ -5,9 +5,10 @@
 import { readFileSync } from 'node:fs';
 import 'dotenv/config';
 import { buildApp } from './app.js';
-import { createSupabaseGateway } from './auth/gateway.js';
+import { createSupabaseGateway, withTokenCache } from './auth/gateway.js';
 import { createRedis } from './cache/redis.js';
 import { parseEnv } from './config/env.js';
+import { watchFeatures } from './db/features.js';
 import { createPool } from './db/pool.js';
 
 function readVersion(): string {
@@ -18,6 +19,8 @@ function readVersion(): string {
 async function main(): Promise<void> {
   const env = parseEnv(process.env);
   const pool = createPool(env.DATABASE_URL);
+  // Which database updates are applied (the API adapts until `npm run migrate` has been run).
+  await watchFeatures(pool);
   const redis = createRedis(env.REDIS_URL);
   await redis.connect().catch(() => undefined); // health endpoint reports Redis as "down" if unreachable
 
@@ -30,11 +33,13 @@ async function main(): Promise<void> {
     // Rate limits are shared through Redis when it is up at start; otherwise each server counts in memory.
     ...(redis.status === 'ready' ? { redis } : {}),
     frontendUrl: env.FRONTEND_URL,
-    gateway: createSupabaseGateway({
-      url: env.SUPABASE_URL,
-      anonKey: env.SUPABASE_ANON_KEY,
-      serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
-    }),
+    gateway: withTokenCache(
+      createSupabaseGateway({
+        url: env.SUPABASE_URL,
+        anonKey: env.SUPABASE_ANON_KEY,
+        serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
+      }),
+    ),
     checks: {
       database: async () => {
         await pool.query('select 1');

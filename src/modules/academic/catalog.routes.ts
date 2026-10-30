@@ -6,7 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withUser, type Db } from '../../db/context.js';
-import { requirePermission } from '../../middleware/authorization.js';
+import { requireAnyPermission, requirePermission } from '../../middleware/authorization.js';
 import { audit } from '../../utils/audit.js';
 import { notFound } from '../../utils/errors.js';
 import { likePattern, listQuerySchema, paginate } from '../../utils/pagination.js';
@@ -24,11 +24,14 @@ import {
   statusSchema,
   withTotal,
 } from './shared.js';
+import { features } from '../../db/features.js';
+import { courseDetailsSchema, subjectDetailsSchema, topicDetailsSchema } from './details.js';
 
 const order = (o: string) => (o === 'desc' ? 'desc' : 'asc');
 
 // ---------- courses ----------
-const COURSE_COLUMNS = `c.id, c.code, c.name, c.description, c.status, c.academic_unit_id as "academicUnitId",
+const COURSE_COLUMNS =
+  () => `c.id, c.code, c.name, c.description, c.status, ${features.catalogDetails ? 'c.details' : `'{}'::jsonb as details`}, c.academic_unit_id as "academicUnitId",
   u.name as "academicUnitName",
   (select count(*)::int from public.subjects s where s.organization_id = c.organization_id
      and s.course_id = c.id and s.deleted_at is null) as "subjectCount",
@@ -46,6 +49,7 @@ const courseCreate = z
     name: nameSchema,
     description: descriptionSchema.optional(),
     academicUnitId: z.uuid().nullable().optional(),
+    details: courseDetailsSchema.optional(),
   })
   .strict();
 const courseUpdate = z
@@ -55,12 +59,14 @@ const courseUpdate = z
     description: descriptionSchema,
     academicUnitId: z.uuid().nullable(),
     status: statusSchema,
+    details: courseDetailsSchema,
   })
   .partial()
   .strict();
 
 // ---------- subjects ----------
-const SUBJECT_COLUMNS = `s.id, s.code, s.name, s.description, s.status,
+const SUBJECT_COLUMNS =
+  () => `s.id, s.code, s.name, s.description, s.status, ${features.catalogDetails ? 's.details' : `'{}'::jsonb as details`},
   s.course_id as "courseId", c.name as "courseName",
   s.academic_unit_id as "academicUnitId", u.name as "academicUnitName",
   (select count(*)::int from public.topics t where t.organization_id = s.organization_id
@@ -81,6 +87,7 @@ const subjectCreate = z
     description: descriptionSchema.optional(),
     courseId: z.uuid().nullable().optional(),
     academicUnitId: z.uuid().nullable().optional(),
+    details: subjectDetailsSchema.optional(),
   })
   .strict();
 const subjectUpdate = z
@@ -91,12 +98,14 @@ const subjectUpdate = z
     courseId: z.uuid().nullable(),
     academicUnitId: z.uuid().nullable(),
     status: statusSchema,
+    details: subjectDetailsSchema,
   })
   .partial()
   .strict();
 
 // ---------- topics ----------
-const TOPIC_COLUMNS = `t.id, t.subject_id as "subjectId", s.name as "subjectName", t.name, t.position,
+const TOPIC_COLUMNS =
+  () => `t.id, t.subject_id as "subjectId", s.name as "subjectName", t.name, t.position, ${features.catalogDetails ? 't.details' : `'{}'::jsonb as details`},
   t.created_at as "createdAt", t.updated_at as "updatedAt"`;
 const TOPIC_FROM = `public.topics t
   join public.subjects s on s.organization_id = t.organization_id and s.id = t.subject_id`;
@@ -107,9 +116,17 @@ const TOPIC_SORT: Record<string, string> = {
 };
 const position = z.number().int().min(0).max(10000);
 const topicCreate = z
-  .object({ subjectId: z.uuid(), name: nameSchema, position: position.optional() })
+  .object({
+    subjectId: z.uuid(),
+    name: nameSchema,
+    position: position.optional(),
+    details: topicDetailsSchema.optional(),
+  })
   .strict();
-const topicUpdate = z.object({ name: nameSchema, position }).partial().strict();
+const topicUpdate = z
+  .object({ name: nameSchema, position, details: topicDetailsSchema })
+  .partial()
+  .strict();
 
 async function getOne(db: Db, sql: string, org: string, id: string, label: string) {
   const r = await db.query(sql, [org, id]);
@@ -119,7 +136,7 @@ async function getOne(db: Db, sql: string, org: string, id: string, label: strin
 const getCourse = (db: Db, org: string, id: string) =>
   getOne(
     db,
-    `select ${COURSE_COLUMNS} from ${COURSE_FROM} where c.organization_id = $1 and c.id = $2 and c.deleted_at is null`,
+    `select ${COURSE_COLUMNS()} from ${COURSE_FROM} where c.organization_id = $1 and c.id = $2 and c.deleted_at is null`,
     org,
     id,
     'Course',
@@ -127,7 +144,7 @@ const getCourse = (db: Db, org: string, id: string) =>
 const getSubject = (db: Db, org: string, id: string) =>
   getOne(
     db,
-    `select ${SUBJECT_COLUMNS} from ${SUBJECT_FROM} where s.organization_id = $1 and s.id = $2 and s.deleted_at is null`,
+    `select ${SUBJECT_COLUMNS()} from ${SUBJECT_FROM} where s.organization_id = $1 and s.id = $2 and s.deleted_at is null`,
     org,
     id,
     'Subject',
@@ -135,7 +152,7 @@ const getSubject = (db: Db, org: string, id: string) =>
 const getTopic = (db: Db, org: string, id: string) =>
   getOne(
     db,
-    `select ${TOPIC_COLUMNS} from ${TOPIC_FROM} where t.organization_id = $1 and t.id = $2 and t.deleted_at is null`,
+    `select ${TOPIC_COLUMNS()} from ${TOPIC_FROM} where t.organization_id = $1 and t.id = $2 and t.deleted_at is null`,
     org,
     id,
     'Topic',
@@ -143,6 +160,63 @@ const getTopic = (db: Db, org: string, id: string) =>
 
 export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): void {
   const org = (req: { ctx: { organization: { id: string } | null } }) => req.ctx.organization!.id;
+
+  // ================= one-call tree for the Courses screen =================
+  // Courses → subjects → topics with question counts, in one round trip (the database is far away; three paged lists
+  // plus per-subject counts would take seconds). Runs as the caller, so RLS still limits what a teacher sees.
+  app.get(
+    `${API}/catalog/tree`,
+    { preHandler: [d.authenticate, requireAnyPermission('course.read', 'subject.read')] },
+    async (req) => {
+      const LIMIT = 3000;
+      const data = await withUser(d.pool, req.ctx.userId, async (db) => {
+        const o = [org(req), LIMIT + 1];
+        const courses = (
+          await db.query(
+            `select c.id, c.code, c.name, c.status from public.courses c
+             where c.organization_id = $1 and c.deleted_at is null order by c.name, c.id limit $2`,
+            o,
+          )
+        ).rows;
+        const subjects = (
+          await db.query(
+            `select s.id, s.code, s.name, s.status, s.course_id as "courseId",
+               (select count(*)::int from public.questions q where q.organization_id = s.organization_id
+                  and q.subject_id = s.id and q.deleted_at is null) as "questionCount",
+               (select json_build_object(
+                  'published', count(*) filter (where q.status = 'published'),
+                  'draft', count(*) filter (where q.status = 'draft'),
+                  'easy', count(*) filter (where q.difficulty = 'easy'),
+                  'medium', count(*) filter (where q.difficulty = 'medium'),
+                  'hard', count(*) filter (where q.difficulty = 'hard'))
+                from public.questions q where q.organization_id = s.organization_id
+                  and q.subject_id = s.id and q.deleted_at is null) as "questionStats"
+             from public.subjects s where s.organization_id = $1 and s.deleted_at is null
+             order by s.name, s.id limit $2`,
+            o,
+          )
+        ).rows;
+        const topics = (
+          await db.query(
+            `select t.id, t.name, t.subject_id as "subjectId", t.position,
+               (select count(*)::int from public.questions q where q.organization_id = t.organization_id
+                  and q.topic_id = t.id and q.deleted_at is null) as "questionCount"
+             from public.topics t where t.organization_id = $1 and t.deleted_at is null
+             order by t.position, t.name, t.id limit $2`,
+            o,
+          )
+        ).rows;
+        const truncated = [courses, subjects, topics].some((r) => r.length > LIMIT);
+        return {
+          courses: courses.slice(0, LIMIT),
+          subjects: subjects.slice(0, LIMIT),
+          topics: topics.slice(0, LIMIT),
+          truncated,
+        };
+      });
+      return ok(data, req.id);
+    },
+  );
 
   // ================= courses =================
   app.get(
@@ -168,7 +242,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         async (db) =>
           (
             await db.query(
-              `select ${COURSE_COLUMNS}, count(*) over() as "__total" from ${COURSE_FROM}
+              `select ${COURSE_COLUMNS()}, count(*) over() as "__total" from ${COURSE_FROM}
                where ${where.join(' and ')}
                order by ${COURSE_SORT[q.sort ?? 'code'] ?? COURSE_SORT.code} ${order(q.order)}, c.id
                limit $${params.length - 1} offset $${params.length}`,
@@ -203,9 +277,16 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           await assertActive(db, 'academic_units', org(req), body.academicUnitId, 'Unit');
         const id = (
           await db.query(
-            `insert into public.courses (organization_id, code, name, description, academic_unit_id)
-             values ($1,$2,$3,$4,$5) returning id`,
-            [org(req), body.code, body.name, body.description ?? null, body.academicUnitId ?? null],
+            `insert into public.courses (organization_id, code, name, description, academic_unit_id${features.catalogDetails ? ', details' : ''})
+             values ($1,$2,$3,$4,$5${features.catalogDetails ? ',$6' : ''}) returning id`,
+            [
+              org(req),
+              body.code,
+              body.name,
+              body.description ?? null,
+              body.academicUnitId ?? null,
+              ...(features.catalogDetails ? [body.details ?? {}] : []),
+            ],
           )
         ).rows[0].id as string;
         return getCourse(db, org(req), id);
@@ -228,6 +309,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         description: 'description',
         academicUnitId: 'academic_unit_id',
         status: 'status',
+        ...(features.catalogDetails ? { details: 'details' } : {}),
       });
       const course = await withUser(d.pool, req.ctx.userId, async (db) => {
         if (body.academicUnitId)
@@ -304,7 +386,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         async (db) =>
           (
             await db.query(
-              `select ${SUBJECT_COLUMNS}, count(*) over() as "__total" from ${SUBJECT_FROM}
+              `select ${SUBJECT_COLUMNS()}, count(*) over() as "__total" from ${SUBJECT_FROM}
                where ${where.join(' and ')}
                order by ${SUBJECT_SORT[q.sort ?? 'code'] ?? SUBJECT_SORT.code} ${order(q.order)}, s.id
                limit $${params.length - 1} offset $${params.length}`,
@@ -340,8 +422,8 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           await assertActive(db, 'academic_units', org(req), body.academicUnitId, 'Unit');
         const id = (
           await db.query(
-            `insert into public.subjects (organization_id, code, name, description, course_id, academic_unit_id)
-             values ($1,$2,$3,$4,$5,$6) returning id`,
+            `insert into public.subjects (organization_id, code, name, description, course_id, academic_unit_id${features.catalogDetails ? ', details' : ''})
+             values ($1,$2,$3,$4,$5,$6${features.catalogDetails ? ',$7' : ''}) returning id`,
             [
               org(req),
               body.code,
@@ -349,6 +431,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
               body.description ?? null,
               body.courseId ?? null,
               body.academicUnitId ?? null,
+              ...(features.catalogDetails ? [body.details ?? {}] : []),
             ],
           )
         ).rows[0].id as string;
@@ -373,6 +456,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         courseId: 'course_id',
         academicUnitId: 'academic_unit_id',
         status: 'status',
+        ...(features.catalogDetails ? { details: 'details' } : {}),
       });
       const subject = await withUser(d.pool, req.ctx.userId, async (db) => {
         if (body.courseId) await assertActive(db, 'courses', org(req), body.courseId, 'Course');
@@ -442,7 +526,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         async (db) =>
           (
             await db.query(
-              `select ${TOPIC_COLUMNS}, count(*) over() as "__total" from ${TOPIC_FROM}
+              `select ${TOPIC_COLUMNS()}, count(*) over() as "__total" from ${TOPIC_FROM}
                where ${where.join(' and ')}
                order by ${TOPIC_SORT[q.sort ?? 'position'] ?? TOPIC_SORT.position} ${order(q.order)}, t.name, t.id
                limit $${params.length - 1} offset $${params.length}`,
@@ -474,8 +558,15 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           ).rows[0].p as number);
         const id = (
           await db.query(
-            `insert into public.topics (organization_id, subject_id, name, position) values ($1,$2,$3,$4) returning id`,
-            [org(req), body.subjectId, body.name, pos],
+            `insert into public.topics (organization_id, subject_id, name, position${features.catalogDetails ? ', details' : ''})
+             values ($1,$2,$3,$4${features.catalogDetails ? ',$5' : ''}) returning id`,
+            [
+              org(req),
+              body.subjectId,
+              body.name,
+              pos,
+              ...(features.catalogDetails ? [body.details ?? {}] : []),
+            ],
           )
         ).rows[0].id as string;
         return getTopic(db, org(req), id);
@@ -492,7 +583,11 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
     async (req) => {
       const { id } = idParams.parse(req.params);
       const body = topicUpdate.parse(req.body);
-      const { sets, vals } = buildSet(body, { name: 'name', position: 'position' });
+      const { sets, vals } = buildSet(body, {
+        name: 'name',
+        position: 'position',
+        ...(features.catalogDetails ? { details: 'details' } : {}),
+      });
       const topic = await withUser(d.pool, req.ctx.userId, async (db) => {
         if (sets.length) {
           vals.push(req.ctx.userId, org(req), id);

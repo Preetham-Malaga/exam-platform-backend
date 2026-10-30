@@ -14,7 +14,21 @@ export function requireOrganization() {
         'NO_ORGANIZATION',
         'Your account is not linked to an active organization.',
       );
+    assertActive(request);
   };
+}
+
+/** Organizations still waiting for e-mail verification or platform approval cannot use the organization API yet. */
+function assertActive(request: FastifyRequest): void {
+  const status = request.ctx.organization?.status;
+  if (status && status !== 'active')
+    throw new AppError(
+      403,
+      'ORGANIZATION_NOT_ACTIVE',
+      status === 'pending_approval' || status === 'pending_email'
+        ? 'Your organization is waiting for approval. You can use it as soon as it is approved.'
+        : 'Your organization is not active. Contact the platform team.',
+    );
 }
 
 export function requirePermission(...codes: PermissionCode[]) {
@@ -25,6 +39,7 @@ export function requirePermission(...codes: PermissionCode[]) {
         'NO_ORGANIZATION',
         'Your account is not linked to an active organization.',
       );
+    assertActive(request);
     if (!codes.every((c) => request.ctx.permissions.includes(c))) throw forbidden();
   };
 }
@@ -37,6 +52,7 @@ export function requireAnyPermission(...codes: PermissionCode[]) {
         'NO_ORGANIZATION',
         'Your account is not linked to an active organization.',
       );
+    assertActive(request);
     if (!codes.some((c) => request.ctx.permissions.includes(c))) throw forbidden();
   };
 }
@@ -49,6 +65,7 @@ export function requireRole(...roles: RoleCode[]) {
         'NO_ORGANIZATION',
         'Your account is not linked to an active organization.',
       );
+    assertActive(request);
     if (!roles.some((r) => request.ctx.roles.includes(r))) throw forbidden();
   };
 }

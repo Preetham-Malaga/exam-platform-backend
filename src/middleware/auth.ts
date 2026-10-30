@@ -7,6 +7,7 @@ import type { Pool } from 'pg';
 import type { AuthGateway } from '../auth/gateway.js';
 import { withSystem } from '../db/context.js';
 import type { RequestContext } from '../types/context.js';
+import { features } from '../db/features.js';
 import { AppError } from '../utils/errors.js';
 
 const CONTEXT_SQL = `
@@ -19,7 +20,7 @@ const CONTEXT_SQL = `
   left join public.roles r on r.id = ur.role_id
   left join public.role_permissions rp on rp.role_id = ur.role_id
   left join public.permissions pm on pm.id = rp.permission_id
-  where m.user_id = $1 and m.status = 'active' and o.status in ('pending_email', 'active')
+  where m.user_id = $1 and m.status = 'active' and o.status in ('pending_email', 'pending_approval', 'active')
   group by m.organization_id, o.org_code, o.name, o.status, m.created_at
   order by m.created_at limit 1`;
 
@@ -50,9 +51,16 @@ export async function resolveContext(
         }
       | undefined;
 
+    // E-mail confirmed: the organization now waits for a platform admin to approve it (migration 043).
     if (org && org.orgStatus === 'pending_email' && user.emailConfirmed) {
-      await db.query('select app.activate_organization($1)', [org.orgId]);
-      org.orgStatus = 'active';
+      if (features.approval) {
+        await db.query('select app.organization_email_confirmed($1)', [org.orgId]);
+        org.orgStatus = 'pending_approval';
+      } else {
+        // Before migration 043 there is no approval step: confirming the e-mail activates the organization.
+        await db.query('select app.activate_organization($1)', [org.orgId]);
+        org.orgStatus = 'active';
+      }
     }
     return {
       userId: user.id,

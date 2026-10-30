@@ -20,10 +20,14 @@ import { registerAcademicStructureRoutes } from './modules/academic/structure.ro
 import { registerAuthRoutes } from './modules/auth/auth.routes.js';
 import { registerUserRoutes } from './modules/users/users.routes.js';
 import { registerOrganizationRoutes } from './modules/organizations/organizations.routes.js';
+import { registerPlatformRoutes } from './modules/platform/platform.routes.js';
 import { registerAttemptRoutes } from './modules/attempts/attempts.routes.js';
 import { registerExamRoutes } from './modules/exams/exams.routes.js';
 import { registerQuestionRoutes } from './modules/questions/questions.routes.js';
+import { registerLearningRoutes } from './modules/learning/learning.routes.js';
 import { registerInsightRoutes } from './modules/results/insights.routes.js';
+import { registerOverviewRoutes } from './modules/results/overview.routes.js';
+import { registerBatchRoutes } from './modules/students/batches.routes.js';
 import { registerStudentRoutes } from './modules/students/students.routes.js';
 import { registerTeacherRoutes } from './modules/teachers/teachers.routes.js';
 import type { RequestContext } from './types/context.js';
@@ -111,15 +115,19 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   };
   registerAuthRoutes(app, deps);
   registerOrganizationRoutes(app, deps);
+  registerPlatformRoutes(app, deps);
   registerUserRoutes(app, deps);
   registerAcademicStructureRoutes(app, deps);
   registerAcademicCatalogRoutes(app, deps);
   registerTeacherRoutes(app, deps);
   registerStudentRoutes(app, deps);
+  registerBatchRoutes(app, deps);
   registerQuestionRoutes(app, deps);
   registerExamRoutes(app, deps);
   registerAttemptRoutes(app, deps);
   registerInsightRoutes(app, deps);
+  registerOverviewRoutes(app, deps);
+  registerLearningRoutes(app, deps);
 
   return app;
 }

@@ -5,6 +5,8 @@
 export interface ApiError {
   code: string;
   message: string;
+  /** The request field the error is about (form key), so the client can show it next to that input. */
+  field?: string;
   details?: unknown;
 }
 
