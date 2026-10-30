@@ -306,7 +306,10 @@ export function registerQuestionRoutes(app: FastifyInstance, d: Deps): void {
       const body = z
         .object({
           publish: z.boolean().default(false),
-          rows: z.array(z.object({ row: z.number().int().min(1) }).passthrough()).min(1).max(500),
+          rows: z
+            .array(z.object({ row: z.number().int().min(1) }).passthrough())
+            .min(1)
+            .max(500),
         })
         .strict()
         .parse(req.body);
@@ -376,7 +379,10 @@ export function registerQuestionRoutes(app: FastifyInstance, d: Deps): void {
             created++;
           } catch (err) {
             await db.query('rollback to savepoint q_row');
-            errors.push({ row, message: err instanceof Error ? err.message : 'Could not save this row.' });
+            errors.push({
+              row,
+              message: err instanceof Error ? err.message : 'Could not save this row.',
+            });
           }
         }
       });

@@ -6,6 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withSystem } from '../../db/context.js';
+import { requireFeature } from '../../db/features.js';
 import { requirePlatformAdmin } from '../../middleware/authorization.js';
 import { AppError } from '../../utils/errors.js';
 import { ok } from '../../utils/response.js';
@@ -42,6 +43,7 @@ export function registerPlatformRoutes(app: FastifyInstance, d: Deps): void {
 
   app.post(`${API}/platform/organizations/:id/approve`, guard, async (req) => {
     const { id } = idParams.parse(req.params);
+    requireFeature('approval');
     const approved = await withSystem(d.pool, async (db) => {
       const done = (
         await db.query('select app.approve_organization($1, $2) as done', [id, req.ctx.userId])

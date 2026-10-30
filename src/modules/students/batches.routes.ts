@@ -6,6 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withUser, type Db } from '../../db/context.js';
+import { requireFeature } from '../../db/features.js';
 import { requirePermission } from '../../middleware/authorization.js';
 import { audit } from '../../utils/audit.js';
 import { AppError, notFound } from '../../utils/errors.js';
@@ -107,6 +108,9 @@ const codeTaken = (err: unknown) =>
     : err;
 
 export function registerBatchRoutes(app: FastifyInstance, d: Deps): void {
+  app.addHook('preHandler', async (req) => {
+    if (req.url.startsWith(`${API}/batches`)) requireFeature('batches');
+  });
   const org = (req: { ctx: { organization: { id: string } | null } }) => req.ctx.organization!.id;
 
   app.get(

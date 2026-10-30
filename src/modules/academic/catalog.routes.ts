@@ -24,12 +24,14 @@ import {
   statusSchema,
   withTotal,
 } from './shared.js';
+import { features } from '../../db/features.js';
 import { courseDetailsSchema, subjectDetailsSchema, topicDetailsSchema } from './details.js';
 
 const order = (o: string) => (o === 'desc' ? 'desc' : 'asc');
 
 // ---------- courses ----------
-const COURSE_COLUMNS = `c.id, c.code, c.name, c.description, c.status, c.details, c.academic_unit_id as "academicUnitId",
+const COURSE_COLUMNS =
+  () => `c.id, c.code, c.name, c.description, c.status, ${features.catalogDetails ? 'c.details' : `'{}'::jsonb as details`}, c.academic_unit_id as "academicUnitId",
   u.name as "academicUnitName",
   (select count(*)::int from public.subjects s where s.organization_id = c.organization_id
      and s.course_id = c.id and s.deleted_at is null) as "subjectCount",
@@ -63,7 +65,8 @@ const courseUpdate = z
   .strict();
 
 // ---------- subjects ----------
-const SUBJECT_COLUMNS = `s.id, s.code, s.name, s.description, s.status, s.details,
+const SUBJECT_COLUMNS =
+  () => `s.id, s.code, s.name, s.description, s.status, ${features.catalogDetails ? 's.details' : `'{}'::jsonb as details`},
   s.course_id as "courseId", c.name as "courseName",
   s.academic_unit_id as "academicUnitId", u.name as "academicUnitName",
   (select count(*)::int from public.topics t where t.organization_id = s.organization_id
@@ -101,7 +104,8 @@ const subjectUpdate = z
   .strict();
 
 // ---------- topics ----------
-const TOPIC_COLUMNS = `t.id, t.subject_id as "subjectId", s.name as "subjectName", t.name, t.position, t.details,
+const TOPIC_COLUMNS =
+  () => `t.id, t.subject_id as "subjectId", s.name as "subjectName", t.name, t.position, ${features.catalogDetails ? 't.details' : `'{}'::jsonb as details`},
   t.created_at as "createdAt", t.updated_at as "updatedAt"`;
 const TOPIC_FROM = `public.topics t
   join public.subjects s on s.organization_id = t.organization_id and s.id = t.subject_id`;
@@ -132,7 +136,7 @@ async function getOne(db: Db, sql: string, org: string, id: string, label: strin
 const getCourse = (db: Db, org: string, id: string) =>
   getOne(
     db,
-    `select ${COURSE_COLUMNS} from ${COURSE_FROM} where c.organization_id = $1 and c.id = $2 and c.deleted_at is null`,
+    `select ${COURSE_COLUMNS()} from ${COURSE_FROM} where c.organization_id = $1 and c.id = $2 and c.deleted_at is null`,
     org,
     id,
     'Course',
@@ -140,7 +144,7 @@ const getCourse = (db: Db, org: string, id: string) =>
 const getSubject = (db: Db, org: string, id: string) =>
   getOne(
     db,
-    `select ${SUBJECT_COLUMNS} from ${SUBJECT_FROM} where s.organization_id = $1 and s.id = $2 and s.deleted_at is null`,
+    `select ${SUBJECT_COLUMNS()} from ${SUBJECT_FROM} where s.organization_id = $1 and s.id = $2 and s.deleted_at is null`,
     org,
     id,
     'Subject',
@@ -148,7 +152,7 @@ const getSubject = (db: Db, org: string, id: string) =>
 const getTopic = (db: Db, org: string, id: string) =>
   getOne(
     db,
-    `select ${TOPIC_COLUMNS} from ${TOPIC_FROM} where t.organization_id = $1 and t.id = $2 and t.deleted_at is null`,
+    `select ${TOPIC_COLUMNS()} from ${TOPIC_FROM} where t.organization_id = $1 and t.id = $2 and t.deleted_at is null`,
     org,
     id,
     'Topic',
@@ -238,7 +242,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         async (db) =>
           (
             await db.query(
-              `select ${COURSE_COLUMNS}, count(*) over() as "__total" from ${COURSE_FROM}
+              `select ${COURSE_COLUMNS()}, count(*) over() as "__total" from ${COURSE_FROM}
                where ${where.join(' and ')}
                order by ${COURSE_SORT[q.sort ?? 'code'] ?? COURSE_SORT.code} ${order(q.order)}, c.id
                limit $${params.length - 1} offset $${params.length}`,
@@ -273,15 +277,15 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           await assertActive(db, 'academic_units', org(req), body.academicUnitId, 'Unit');
         const id = (
           await db.query(
-            `insert into public.courses (organization_id, code, name, description, academic_unit_id, details)
-             values ($1,$2,$3,$4,$5,$6) returning id`,
+            `insert into public.courses (organization_id, code, name, description, academic_unit_id${features.catalogDetails ? ', details' : ''})
+             values ($1,$2,$3,$4,$5${features.catalogDetails ? ',$6' : ''}) returning id`,
             [
               org(req),
               body.code,
               body.name,
               body.description ?? null,
               body.academicUnitId ?? null,
-              body.details ?? {},
+              ...(features.catalogDetails ? [body.details ?? {}] : []),
             ],
           )
         ).rows[0].id as string;
@@ -305,7 +309,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         description: 'description',
         academicUnitId: 'academic_unit_id',
         status: 'status',
-        details: 'details',
+        ...(features.catalogDetails ? { details: 'details' } : {}),
       });
       const course = await withUser(d.pool, req.ctx.userId, async (db) => {
         if (body.academicUnitId)
@@ -382,7 +386,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         async (db) =>
           (
             await db.query(
-              `select ${SUBJECT_COLUMNS}, count(*) over() as "__total" from ${SUBJECT_FROM}
+              `select ${SUBJECT_COLUMNS()}, count(*) over() as "__total" from ${SUBJECT_FROM}
                where ${where.join(' and ')}
                order by ${SUBJECT_SORT[q.sort ?? 'code'] ?? SUBJECT_SORT.code} ${order(q.order)}, s.id
                limit $${params.length - 1} offset $${params.length}`,
@@ -418,8 +422,8 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           await assertActive(db, 'academic_units', org(req), body.academicUnitId, 'Unit');
         const id = (
           await db.query(
-            `insert into public.subjects (organization_id, code, name, description, course_id, academic_unit_id, details)
-             values ($1,$2,$3,$4,$5,$6,$7) returning id`,
+            `insert into public.subjects (organization_id, code, name, description, course_id, academic_unit_id${features.catalogDetails ? ', details' : ''})
+             values ($1,$2,$3,$4,$5,$6${features.catalogDetails ? ',$7' : ''}) returning id`,
             [
               org(req),
               body.code,
@@ -427,7 +431,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
               body.description ?? null,
               body.courseId ?? null,
               body.academicUnitId ?? null,
-              body.details ?? {},
+              ...(features.catalogDetails ? [body.details ?? {}] : []),
             ],
           )
         ).rows[0].id as string;
@@ -452,7 +456,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         courseId: 'course_id',
         academicUnitId: 'academic_unit_id',
         status: 'status',
-        details: 'details',
+        ...(features.catalogDetails ? { details: 'details' } : {}),
       });
       const subject = await withUser(d.pool, req.ctx.userId, async (db) => {
         if (body.courseId) await assertActive(db, 'courses', org(req), body.courseId, 'Course');
@@ -522,7 +526,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
         async (db) =>
           (
             await db.query(
-              `select ${TOPIC_COLUMNS}, count(*) over() as "__total" from ${TOPIC_FROM}
+              `select ${TOPIC_COLUMNS()}, count(*) over() as "__total" from ${TOPIC_FROM}
                where ${where.join(' and ')}
                order by ${TOPIC_SORT[q.sort ?? 'position'] ?? TOPIC_SORT.position} ${order(q.order)}, t.name, t.id
                limit $${params.length - 1} offset $${params.length}`,
@@ -554,9 +558,15 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
           ).rows[0].p as number);
         const id = (
           await db.query(
-            `insert into public.topics (organization_id, subject_id, name, position, details)
-             values ($1,$2,$3,$4,$5) returning id`,
-            [org(req), body.subjectId, body.name, pos, body.details ?? {}],
+            `insert into public.topics (organization_id, subject_id, name, position${features.catalogDetails ? ', details' : ''})
+             values ($1,$2,$3,$4${features.catalogDetails ? ',$5' : ''}) returning id`,
+            [
+              org(req),
+              body.subjectId,
+              body.name,
+              pos,
+              ...(features.catalogDetails ? [body.details ?? {}] : []),
+            ],
           )
         ).rows[0].id as string;
         return getTopic(db, org(req), id);
@@ -576,7 +586,7 @@ export function registerAcademicCatalogRoutes(app: FastifyInstance, d: Deps): vo
       const { sets, vals } = buildSet(body, {
         name: 'name',
         position: 'position',
-        details: 'details',
+        ...(features.catalogDetails ? { details: 'details' } : {}),
       });
       const topic = await withUser(d.pool, req.ctx.userId, async (db) => {
         if (sets.length) {

@@ -8,6 +8,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withUser, type Db } from '../../db/context.js';
+import { requireFeature } from '../../db/features.js';
 import { requirePermission } from '../../middleware/authorization.js';
 import { audit } from '../../utils/audit.js';
 import { notFound } from '../../utils/errors.js';
@@ -190,6 +191,10 @@ async function getOne(db: Db, r: Resource, org: string, id: string) {
 }
 
 export function registerLearningRoutes(app: FastifyInstance, d: Deps): void {
+  const paths = RESOURCES.map((r) => `${API}/${r.path}`);
+  app.addHook('preHandler', async (req) => {
+    if (paths.some((p) => req.url.startsWith(p))) requireFeature('learning');
+  });
   const org = (req: { ctx: { organization: { id: string } | null } }) => req.ctx.organization!.id;
 
   for (const r of RESOURCES) {

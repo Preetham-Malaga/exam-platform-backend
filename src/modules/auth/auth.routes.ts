@@ -5,6 +5,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withSystem, withUser } from '../../db/context.js';
+import { features } from '../../db/features.js';
 import { strictRateLimit } from '../../middleware/rateLimit.js';
 import { fromDatabaseError } from '../../utils/errors.js';
 import { ok } from '../../utils/response.js';
@@ -56,20 +57,21 @@ export function registerAuthRoutes(app: FastifyInstance, d: Deps): void {
             body.institutionType,
           ])
         ).rows[0].id as string;
-        await db.query(
-          `update public.organizations
+        if (features.approval)
+          await db.query(
+            `update public.organizations
              set city = $2, state = $3, contact_phone = coalesce($4, contact_phone), heard_from = $5,
                  terms_accepted_at = case when $6 then now() end
            where id = $1`,
-          [
-            id,
-            body.city ?? null,
-            body.state ?? null,
-            body.mobile ?? null,
-            body.heardFrom ?? null,
-            body.acceptTerms === true,
-          ],
-        );
+            [
+              id,
+              body.city ?? null,
+              body.state ?? null,
+              body.mobile ?? null,
+              body.heardFrom ?? null,
+              body.acceptTerms === true,
+            ],
+          );
         await db.query(
           `insert into public.audit_logs (organization_id, user_id, action, resource, resource_id, ip, request_id) values ($1,$2,'ORGANIZATION_REGISTERED','organizations',$5,$3,$4)`,
           [id, user.id, req.ip, req.id, id],

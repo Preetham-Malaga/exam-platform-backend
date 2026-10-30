@@ -9,6 +9,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withUser, type Db } from '../../db/context.js';
+import { features } from '../../db/features.js';
 import { requirePermission } from '../../middleware/authorization.js';
 import { ok } from '../../utils/response.js';
 import { API, type Deps } from '../deps.js';
@@ -35,8 +36,11 @@ async function overview(db: Db, org: string, f: OverviewFilter) {
   const many = async (sql: string, params: unknown[]) => (await db.query(sql, params)).rows;
 
   const tz =
-    ((await one(`select timezone from public.organization_settings where organization_id = $1`, [org]))
-      ?.timezone as string | undefined) ?? 'Asia/Kolkata';
+    ((
+      await one(`select timezone from public.organization_settings where organization_id = $1`, [
+        org,
+      ])
+    )?.timezone as string | undefined) ?? 'Asia/Kolkata';
   // The zone name is written into SQL below, so only plain IANA names are accepted.
   const zone = /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+)*$/.test(tz) ? tz : 'Asia/Kolkata';
   const today = `(now() at time zone '${zone}')::date`;
@@ -144,16 +148,18 @@ async function overview(db: Db, org: string, f: OverviewFilter) {
     p,
   );
   // Live classes today for the chosen batch (migration 046); 'live now' = from 10 minutes before the start to the end.
-  const live = await one(
-    `select count(*)::int as today,
+  const live = !features.learning
+    ? { today: null, liveNow: 0 }
+    : await one(
+        `select count(*)::int as today,
        count(*) filter (where now() between x.starts_at - interval '10 minutes'
                           and x.starts_at + make_interval(mins => x.duration_minutes))::int as "liveNow"
      from public.live_classes x
      where x.organization_id = $1 and x.deleted_at is null and x.status = 'scheduled'
        and ($2::uuid is null or x.batch_id = $2)
        and (x.starts_at at time zone '${zone}')::date = ${today}`,
-    [org, f.batch ?? null],
-  );
+        [org, f.batch ?? null],
+      );
   const teachers = await many(
     `select t.id, t.full_name as name, t.email, (t.user_id is not null) as "hasLogin"
      from public.teachers t where t.organization_id = $1 and t.deleted_at is null and t.status = 'active'
@@ -176,7 +182,7 @@ async function overview(db: Db, org: string, f: OverviewFilter) {
       averagePercentage: results.averagePercentage ?? null,
       passed: n(results.passed),
       passRate: resCount ? Math.round((100 * n(results.passed)) / resCount) : null,
-      liveToday: n(live.today),
+      liveToday: live.today == null ? null : n(live.today),
       liveNow: n(live.liveNow),
     },
     flow: {

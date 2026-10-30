@@ -33,7 +33,9 @@ const settingsSchema = z
         /** Colour theme for everyone in the organization (prototype Settings › Branding). */
         theme: z.enum(['violet', 'ocean', 'forest', 'sunset']).optional(),
         /** Prototype Settings › Date & time: used by every table, window, schedule and PDF. */
-        dateFormat: z.enum(['DD-MM-YYYY', 'DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD', 'DD MMM YYYY']).optional(),
+        dateFormat: z
+          .enum(['DD-MM-YYYY', 'DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD', 'DD MMM YYYY'])
+          .optional(),
         timeFormat: z.enum(['12', '24']).optional(),
         weekStart: z.enum(['Monday', 'Sunday']).optional(),
       })

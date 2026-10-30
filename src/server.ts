@@ -8,6 +8,7 @@ import { buildApp } from './app.js';
 import { createSupabaseGateway, withTokenCache } from './auth/gateway.js';
 import { createRedis } from './cache/redis.js';
 import { parseEnv } from './config/env.js';
+import { watchFeatures } from './db/features.js';
 import { createPool } from './db/pool.js';
 
 function readVersion(): string {
@@ -18,6 +19,8 @@ function readVersion(): string {
 async function main(): Promise<void> {
   const env = parseEnv(process.env);
   const pool = createPool(env.DATABASE_URL);
+  // Which database updates are applied (the API adapts until `npm run migrate` has been run).
+  await watchFeatures(pool);
   const redis = createRedis(env.REDIS_URL);
   await redis.connect().catch(() => undefined); // health endpoint reports Redis as "down" if unreachable
 

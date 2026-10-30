@@ -21,6 +21,8 @@ import {
   removeMembership,
   syncMembershipStatus,
 } from '../_shared/member.js';
+import { studentDetailsSchema } from '../_shared/personDetails.js';
+import { features, requireFeature } from '../../db/features.js';
 import { assertActive, buildSet, idParams, statusSchema, withTotal } from '../academic/shared.js';
 import { API, type Deps } from '../deps.js';
 
@@ -42,6 +44,7 @@ const createSchema = z
     phone: personPhoneSchema.optional(),
     academicUnitId: z.uuid().nullable().optional(),
     batchId: z.uuid().nullable().optional(),
+    details: studentDetailsSchema.optional(),
     /** Create the login and send the invitation e-mail now. */
     invite: z.boolean().default(false),
   })
@@ -54,6 +57,7 @@ const updateSchema = z
     phone: personPhoneSchema,
     academicUnitId: z.uuid().nullable(),
     batchId: z.uuid().nullable(),
+    details: studentDetailsSchema,
     status: statusSchema,
   })
   .partial()
@@ -83,21 +87,24 @@ const SORT: Record<string, string> = {
   rollNumber: 's.roll_number',
   createdAt: 's.created_at',
 };
-const COLUMNS = `s.id, s.roll_number as "rollNumber", s.full_name as "fullName", s.email, s.phone, s.status,
+// Batch (045) and details (047) only once their database updates are applied.
+const COLUMNS =
+  () => `s.id, s.roll_number as "rollNumber", s.full_name as "fullName", s.email, s.phone, s.status,
   s.academic_unit_id as "academicUnitId", u.name as "academicUnitName",
-  s.batch_id as "batchId", bt.name as "batchName",
+  ${features.batches ? 's.batch_id as "batchId", bt.name as "batchName"' : 'null::uuid as "batchId", null::text as "batchName"'},
+  ${features.peopleDetails ? 's.details' : `'{}'::jsonb as details`},
   s.user_id as "userId", m.status as "accountStatus",
   s.created_at as "createdAt", s.updated_at as "updatedAt"`;
-const FROM = `public.students s
+const FROM = () => `public.students s
   left join public.academic_units u on u.organization_id = s.organization_id and u.id = s.academic_unit_id
-  left join public.batches bt on bt.organization_id = s.organization_id and bt.id = s.batch_id
+  ${features.batches ? 'left join public.batches bt on bt.organization_id = s.organization_id and bt.id = s.batch_id' : ''}
   left join public.organization_members m on m.organization_id = s.organization_id and m.user_id = s.user_id`;
 
 type Row = Record<string, unknown>;
 
 async function getStudent(db: Db, org: string, id: string): Promise<Row> {
   const r = await db.query(
-    `select ${COLUMNS} from ${FROM} where s.organization_id = $1 and s.id = $2 and s.deleted_at is null`,
+    `select ${COLUMNS()} from ${FROM()} where s.organization_id = $1 and s.id = $2 and s.deleted_at is null`,
     [org, id],
   );
   if (!r.rows[0]) throw notFound('Student');
@@ -120,6 +127,25 @@ async function assertBatch(d: Deps, userId: string, org: string, batchId: string
     ),
   );
   if (!found.rowCount) throw notFound('Batch');
+}
+
+/** Batch and details right after the insert, in the same transaction, when their columns exist. */
+async function saveExtras(
+  db: Db,
+  org: string,
+  id: string,
+  body: { batchId?: string | null | undefined; details?: Record<string, unknown> | undefined },
+): Promise<void> {
+  if (features.batches && body.batchId)
+    await db.query(
+      'update public.students set batch_id = $1 where organization_id = $2 and id = $3',
+      [body.batchId, org, id],
+    );
+  if (features.peopleDetails && body.details)
+    await db.query(
+      'update public.students set details = $1 where organization_id = $2 and id = $3',
+      [body.details, org, id],
+    );
 }
 
 export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
@@ -145,6 +171,7 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
       const params: unknown[] = [org(req)];
       const where = ['s.organization_id = $1', 's.deleted_at is null'];
       if (f.status) where.push(`s.status = $${params.push(f.status)}`);
+      if ((f.noBatch === 'true' || f.batchId) && !features.batches) requireFeature('batches');
       if (f.noBatch === 'true') where.push('s.batch_id is null');
       else if (f.batchId) where.push(`s.batch_id = $${params.push(f.batchId)}`);
       if (f.unplaced === 'true') where.push('s.academic_unit_id is null');
@@ -170,7 +197,7 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
         async (db) =>
           (
             await db.query(
-              `select ${COLUMNS}, count(*) over() as "__total" from ${FROM}
+              `select ${COLUMNS()}, count(*) over() as "__total" from ${FROM()}
                where ${where.join(' and ')}
                order by ${SORT[q.sort ?? 'rollNumber'] ?? SORT.rollNumber} ${q.order === 'desc' ? 'desc' : 'asc'}, s.id
                limit $${params.length - 1} offset $${params.length}`,
@@ -210,13 +237,16 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
         await withUser(d.pool, req.ctx.userId, (db) =>
           assertActive(db, 'academic_units', org(req), body.academicUnitId!, 'Unit'),
         );
-      if (body.batchId) await assertBatch(d, req.ctx.userId, org(req), body.batchId);
-      const insert = async (db: Db, userId: string | null) =>
-        (
+      if (body.batchId) {
+        requireFeature('batches');
+        await assertBatch(d, req.ctx.userId, org(req), body.batchId);
+      }
+      const insert = async (db: Db, userId: string | null) => {
+        const sid = (
           await db.query(
             `insert into public.students
-               (organization_id, user_id, roll_number, full_name, email, phone, academic_unit_id, created_by, batch_id)
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
+               (organization_id, user_id, roll_number, full_name, email, phone, academic_unit_id, created_by)
+             values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
             [
               org(req),
               userId,
@@ -226,10 +256,12 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
               body.phone ?? null,
               body.academicUnitId ?? null,
               req.ctx.userId,
-              body.batchId ?? null,
             ],
           )
         ).rows[0].id as string;
+        await saveExtras(db, org(req), sid, body);
+        return sid;
+      };
       // If only the invitation e-mail fails (mailer limit, mail server down), the student is still saved without a
       // login and the reply says why; the invitation can be sent again from the student's row.
       let inviteError: { code: string; message: string } | null = null;
@@ -403,10 +435,14 @@ export function registerStudentRoutes(app: FastifyInstance, d: Deps): void {
         email: 'email',
         phone: 'phone',
         academicUnitId: 'academic_unit_id',
-        batchId: 'batch_id',
+        ...(features.batches ? { batchId: 'batch_id' } : {}),
+        ...(features.peopleDetails ? { details: 'details' } : {}),
         status: 'status',
       });
-      if (body.batchId) await assertBatch(d, req.ctx.userId, org(req), body.batchId);
+      if (body.batchId) {
+        requireFeature('batches');
+        await assertBatch(d, req.ctx.userId, org(req), body.batchId);
+      }
       const student = await withUser(d.pool, req.ctx.userId, async (db) => {
         const current = await getStudent(db, org(req), id);
         if (current.userId && body.email !== undefined && body.email !== current.email)

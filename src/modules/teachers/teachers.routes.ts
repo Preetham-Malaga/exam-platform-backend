@@ -22,6 +22,8 @@ import {
   removeMembership,
   syncMembershipStatus,
 } from '../_shared/member.js';
+import { teacherDetailsSchema } from '../_shared/personDetails.js';
+import { features } from '../../db/features.js';
 import { buildSet, codeSchema, idParams, statusSchema, withTotal } from '../academic/shared.js';
 import { API, type Deps } from '../deps.js';
 
@@ -33,6 +35,7 @@ const createSchema = z
     fullName: nameSchema,
     email: emailSchema.nullable().optional(),
     phone: phoneSchema.optional(),
+    details: teacherDetailsSchema.optional(),
     /** Create the login and send the invitation e-mail now (default). */
     invite: z.boolean().default(true),
   })
@@ -43,6 +46,7 @@ const updateSchema = z
     fullName: nameSchema,
     email: emailSchema.nullable(),
     phone: phoneSchema,
+    details: teacherDetailsSchema,
     status: statusSchema,
   })
   .partial()
@@ -69,7 +73,10 @@ const SORT: Record<string, string> = {
   employeeCode: 't.employee_code',
   createdAt: 't.created_at',
 };
-const COLUMNS = `t.id, t.employee_code as "employeeCode", t.full_name as "fullName", t.email, t.phone, t.status,
+// Details (047) only once that database update is applied.
+const COLUMNS =
+  () => `t.id, t.employee_code as "employeeCode", t.full_name as "fullName", t.email, t.phone, t.status,
+  ${features.peopleDetails ? 't.details' : `'{}'::jsonb as details`},
   t.user_id as "userId", m.status as "accountStatus",
   (select count(*)::int from public.user_scopes us
     where us.organization_id = t.organization_id and us.user_id = t.user_id) as "scopeCount",
@@ -81,7 +88,7 @@ type Row = Record<string, unknown>;
 
 async function getTeacher(db: Db, org: string, id: string): Promise<Row> {
   const r = await db.query(
-    `select ${COLUMNS} from ${FROM} where t.organization_id = $1 and t.id = $2 and t.deleted_at is null`,
+    `select ${COLUMNS()} from ${FROM} where t.organization_id = $1 and t.id = $2 and t.deleted_at is null`,
     [org, id],
   );
   if (!r.rows[0]) throw notFound('Teacher');
@@ -132,7 +139,7 @@ export function registerTeacherRoutes(app: FastifyInstance, d: Deps): void {
         async (db) =>
           (
             await db.query(
-              `select ${COLUMNS}, count(*) over() as "__total" from ${FROM}
+              `select ${COLUMNS()}, count(*) over() as "__total" from ${FROM}
                where ${where.join(' and ')}
                order by ${SORT[q.sort ?? 'fullName'] ?? SORT.fullName} ${q.order === 'desc' ? 'desc' : 'asc'}, t.id
                limit $${params.length - 1} offset $${params.length}`,
@@ -178,14 +185,21 @@ export function registerTeacherRoutes(app: FastifyInstance, d: Deps): void {
         body.phone ?? null,
         req.ctx.userId,
       ];
-      const insert = async (db: Db, userId: string | null) =>
-        (
+      const insert = async (db: Db, userId: string | null) => {
+        const tid = (
           await db.query(
             `insert into public.teachers (organization_id, user_id, employee_code, full_name, email, phone, created_by)
              values ($1,$2,$3,$4,$5,$6,$7) returning id`,
             values(userId),
           )
         ).rows[0].id as string;
+        if (features.peopleDetails && body.details)
+          await db.query(
+            'update public.teachers set details = $1 where organization_id = $2 and id = $3',
+            [body.details, org(req), tid],
+          );
+        return tid;
+      };
       // If only the invitation e-mail fails (mailer limit, mail server down), the teacher is still saved without a
       // login and the reply says why; the invitation can be sent again from the teacher's row.
       let inviteError: { code: string; message: string } | null = null;
@@ -258,6 +272,7 @@ export function registerTeacherRoutes(app: FastifyInstance, d: Deps): void {
         fullName: 'full_name',
         email: 'email',
         phone: 'phone',
+        ...(features.peopleDetails ? { details: 'details' } : {}),
         status: 'status',
       });
       const teacher = await withUser(d.pool, req.ctx.userId, async (db) => {
