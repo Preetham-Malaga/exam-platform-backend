@@ -56,6 +56,7 @@ const EXPECTED_FILES = [
   '043_organization_approval',
   '044_catalog_details',
   '045_batches',
+  '046_learning',
 ].map((n) => `${n}.sql`);
 
 // Tables that carry organization_id but intentionally do not follow every rule (documented in docs/database.md).

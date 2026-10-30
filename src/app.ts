@@ -24,6 +24,7 @@ import { registerPlatformRoutes } from './modules/platform/platform.routes.js';
 import { registerAttemptRoutes } from './modules/attempts/attempts.routes.js';
 import { registerExamRoutes } from './modules/exams/exams.routes.js';
 import { registerQuestionRoutes } from './modules/questions/questions.routes.js';
+import { registerLearningRoutes } from './modules/learning/learning.routes.js';
 import { registerInsightRoutes } from './modules/results/insights.routes.js';
 import { registerOverviewRoutes } from './modules/results/overview.routes.js';
 import { registerBatchRoutes } from './modules/students/batches.routes.js';
@@ -126,6 +127,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerAttemptRoutes(app, deps);
   registerInsightRoutes(app, deps);
   registerOverviewRoutes(app, deps);
+  registerLearningRoutes(app, deps);
 
   return app;
 }
